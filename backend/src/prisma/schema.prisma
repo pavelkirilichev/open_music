@@ -1,0 +1,158 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  libraryTracks LibraryTrack[]
+  libraryAlbums  LibraryAlbum[]
+  libraryArtists LibraryArtist[]
+  playlists      Playlist[]
+  listenHistory ListenHistory[]
+  cachedAudios  CachedAudio[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tracks (metadata cache) ───────────────────────────────────────────────────
+
+model Track {
+  id         String   @id @default(cuid())
+  provider   String
+  providerId String
+  title      String
+  artist     String
+  album      String?
+  duration   Int?
+  artworkUrl String?
+  year       Int?
+  genre      String?
+  metadataJson String?  // JSON stored as String (SQLite doesn't support Json type natively)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  libraryTracks  LibraryTrack[]
+  playlistTracks PlaylistTrack[]
+  listenHistory  ListenHistory[]
+  cachedAudios   CachedAudio[]
+
+  @@unique([provider, providerId])
+}
+
+// ─── Library ──────────────────────────────────────────────────────────────────
+
+model LibraryTrack {
+  userId  String
+  trackId String
+  likedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@id([userId, trackId])
+}
+
+model LibraryAlbum {
+  id          String   @id @default(cuid())
+  userId      String
+  albumRefJson String  // JSON stored as String
+  addedAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LibraryArtist {
+  id         String   @id @default(cuid())
+  userId     String
+  artistJson String   // JSON stored as String: {name, mbid?, imageUrl?}
+  addedAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Playlists ────────────────────────────────────────────────────────────────
+
+model Playlist {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String?
+  isPublic    Boolean  @default(false)
+  artworkUrl  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks PlaylistTrack[]
+}
+
+model PlaylistTrack {
+  playlistId String
+  trackId    String
+  position   Int
+  addedAt    DateTime @default(now())
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  track    Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@id([playlistId, trackId])
+}
+
+// ─── Audio cache ──────────────────────────────────────────────────────────────
+
+model CachedAudio {
+  id         String    @id @default(cuid())
+  trackId    String
+  userId     String?
+  storageKey String    @unique
+  fileSize   Int?      // bytes as Int (SQLite doesn't have BigInt)
+  mimeType   String    @default("audio/mpeg")
+  status     String    @default("pending")
+  errorMsg   String?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  track Track  @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+// ─── Listen history ───────────────────────────────────────────────────────────
+
+model ListenHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  trackId    String
+  listenedAt DateTime @default(now())
+  durationMs Int?
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+}
