@@ -7,6 +7,7 @@ export interface Track {
   title: string;
   artist: string;
   album?: string;
+  albumMbid?: string;
   duration?: number; // seconds
   artworkUrl?: string;
   year?: number;

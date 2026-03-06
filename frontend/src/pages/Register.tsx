@@ -25,7 +25,7 @@ export function RegisterPage() {
 
   const errMsg =
     (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
-      ?.message ?? 'Registration failed';
+      ?.message ?? 'Ошибка регистрации';
 
   return (
     <Box
@@ -44,7 +44,7 @@ export function RegisterPage() {
             Open Music
           </Typography>
           <Typography variant="h6" mt={1}>
-            Create your account
+            Создайте аккаунт
           </Typography>
         </Box>
 
@@ -56,7 +56,7 @@ export function RegisterPage() {
 
         <Box component="form" onSubmit={handleSubmit} display="flex" flexDirection="column" gap={2}>
           <TextField
-            label="Email"
+            label="Почта"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -65,22 +65,22 @@ export function RegisterPage() {
             fullWidth
           />
           <TextField
-            label="Username"
+            label="Имя пользователя"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
             inputProps={{ minLength: 3, maxLength: 32, pattern: '[a-zA-Z0-9_]+' }}
-            helperText="Letters, numbers, underscores only"
+            helperText="Только буквы, цифры и подчёркивания"
             fullWidth
           />
           <TextField
-            label="Password"
+            label="Пароль"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
             inputProps={{ minLength: 8 }}
-            helperText="Minimum 8 characters"
+            helperText="Минимум 8 символов"
             fullWidth
           />
           <Button
@@ -90,15 +90,15 @@ export function RegisterPage() {
             size="large"
             disabled={isPending}
           >
-            {isPending ? 'Creating account...' : 'Sign up'}
+            {isPending ? 'Создание аккаунта...' : 'Зарегистрироваться'}
           </Button>
         </Box>
 
         <Box textAlign="center" mt={3}>
           <Typography variant="body2" color="text.secondary">
-            Already have an account?{' '}
+            Уже есть аккаунт?{' '}
             <Link component={RouterLink} to="/login" color="primary">
-              Log in
+              Войти
             </Link>
           </Typography>
         </Box>

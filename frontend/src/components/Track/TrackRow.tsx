@@ -28,28 +28,20 @@ import { useQueueStore } from '../../store/queue.store';
 import { useLikeTrack, useUnlikeTrack } from '../../api/hooks/useLibrary';
 import { useAuthStore } from '../../store/auth.store';
 import { api } from '../../api/client';
-
-function parseArtists(artistStr: string): Array<{ name: string; separator?: string }> {
-  const parts: Array<{ name: string; separator?: string }> = [];
-  const regex = /( ft\. | feat\. | featuring | & |, )/i;
-  const tokens = artistStr.split(regex);
-  tokens.forEach((token) => {
-    if (regex.test(token)) {
-      if (parts.length > 0) parts[parts.length - 1].separator = token;
-    } else if (token.trim()) {
-      parts.push({ name: token.trim() });
-    }
-  });
-  return parts;
-}
+import { formatAlbumName, formatArtistNames, parseArtistNames, sanitizeTrackTitle, withFeaturedInTitle } from '../../utils/trackText';
 
 interface TrackRowProps {
   track: Track;
   index?: number;
   showIndex?: boolean;
   queue?: Track[];
-  likedSet?: Set<string>; // "provider:providerId" → passed from parent, no N+1
+  likedSet?: Set<string>; // "provider:providerId" passed from parent, no N+1
   onAddToPlaylist?: (track: Track) => void;
+  hideSecondaryText?: boolean;
+  showAlbumRight?: boolean;
+  appendFeatToTitle?: boolean;
+  primaryArtistName?: string;
+  linkTitleToTrack?: boolean;
 }
 
 function formatDuration(seconds?: number): string {
@@ -59,7 +51,19 @@ function formatDuration(seconds?: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlaylist }: TrackRowProps) {
+export function TrackRow({
+  track,
+  index,
+  showIndex,
+  queue,
+  likedSet,
+  onAddToPlaylist,
+  hideSecondaryText = false,
+  showAlbumRight = false,
+  appendFeatToTitle = false,
+  primaryArtistName,
+  linkTitleToTrack = false,
+}: TrackRowProps) {
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [hovered, setHovered] = useState(false);
   const navigate = useNavigate();
@@ -72,9 +76,12 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
   const isCurrentTrack =
     currentQueueTrack?.provider === track.provider &&
     currentQueueTrack?.providerId === track.providerId;
+  const displayTitle = appendFeatToTitle
+    ? withFeaturedInTitle(track.title, track.artist, primaryArtistName)
+    : sanitizeTrackTitle(track.title, track.artist);
 
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
-  // O(1) lookup from parent-provided Set — zero extra requests
+  // O(1) lookup from parent-provided Set, zero extra requests
   const liked = likedSet?.has(`${track.provider}:${track.providerId}`) ?? false;
 
   const { mutate: likeTrack } = useLikeTrack();
@@ -99,6 +106,12 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
     } else {
       likeTrack({ provider: track.provider, providerId: track.providerId });
     }
+  };
+
+  const handleOpenTrack = (e: React.MouseEvent<HTMLElement>) => {
+    if (!linkTitleToTrack) return;
+    e.stopPropagation();
+    navigate(`/track/${track.provider}/${track.providerId}`);
   };
 
   const handleCache = async () => {
@@ -163,14 +176,21 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
             fontWeight={isCurrentTrack ? 600 : 400}
             color={isCurrentTrack ? 'primary.main' : 'text.primary'}
             noWrap
-            sx={{ fontSize: 13 }}
+            onClick={linkTitleToTrack ? handleOpenTrack : undefined}
+            sx={{
+              fontSize: 13,
+              cursor: linkTitleToTrack ? 'pointer' : 'default',
+              '&:hover': linkTitleToTrack ? { textDecoration: 'underline' } : undefined,
+            }}
           >
-            {track.title}
+            {displayTitle}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: 11 }}>
-            {track.artist}
-            {track.duration ? ` • ${formatDuration(track.duration)}` : ''}
-          </Typography>
+          {!hideSecondaryText && (
+            <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: 11 }}>
+              {formatArtistNames(track.artist)}
+              {track.duration ? ` - ${formatDuration(track.duration)}` : ''}
+            </Typography>
+          )}
         </Box>
 
         {/* Actions */}
@@ -194,27 +214,27 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
               <ListItemIcon>
                 {liked ? <FavoriteIcon fontSize="small" color="primary" /> : <FavoriteBorderIcon fontSize="small" />}
               </ListItemIcon>
-              <ListItemText>{liked ? 'Убрать из любимых' : 'В любимые'}</ListItemText>
+              <ListItemText>{liked ? 'Убрать из любимых' : 'Добавить в любимые'}</ListItemText>
             </MenuItem>
           )}
           <MenuItem onClick={(e) => { e.stopPropagation(); useQueueStore.getState().addNext(track); setMenuAnchor(null); }}>
             <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Play next</ListItemText>
+            <ListItemText>Слушать следующим</ListItemText>
           </MenuItem>
           <MenuItem onClick={(e) => { e.stopPropagation(); useQueueStore.getState().addToQueue(track); setMenuAnchor(null); }}>
             <ListItemIcon><QueueMusicIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Add to queue</ListItemText>
+            <ListItemText>Добавить в очередь</ListItemText>
           </MenuItem>
           {onAddToPlaylist && (
             <MenuItem onClick={(e) => { e.stopPropagation(); onAddToPlaylist(track); setMenuAnchor(null); }}>
               <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Add to playlist</ListItemText>
+              <ListItemText>Добавить в плейлист</ListItemText>
             </MenuItem>
           )}
           {isLoggedIn && (
             <MenuItem onClick={(e) => { e.stopPropagation(); handleCache(); }}>
               <ListItemIcon><CloudDownloadIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Cache for offline</ListItemText>
+              <ListItemText>Сохранить для офлайна</ListItemText>
             </MenuItem>
           )}
           <MenuItem
@@ -225,7 +245,7 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
             onClick={(e) => e.stopPropagation()}
           >
             <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Open source</ListItemText>
+            <ListItemText>Открыть источник</ListItemText>
           </MenuItem>
         </Menu>
       </Box>
@@ -239,9 +259,9 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
       onMouseLeave={() => setHovered(false)}
       sx={{
         display: 'grid',
-        gridTemplateColumns: showIndex
-          ? '40px 48px 1fr 80px 40px'
-          : '48px 1fr 80px 40px',
+        gridTemplateColumns: showAlbumRight
+          ? (showIndex ? '40px 48px 1fr minmax(120px, 0.55fr) 72px 40px' : '48px 1fr minmax(120px, 0.55fr) 72px 40px')
+          : (showIndex ? '40px 48px 1fr 80px 40px' : '48px 1fr 80px 40px'),
         alignItems: 'center',
         gap: 1,
         px: 2,
@@ -275,7 +295,7 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
       {/* Artwork + Play */}
       <Box sx={{ position: 'relative', cursor: 'pointer' }} onClick={handlePlay}>
         <ArtworkImage src={track.artworkUrl} size={40} borderRadius={0.5} />
-        {(hovered || isCurrentTrack) && (
+        {!showIndex && (hovered || isCurrentTrack) && (
           <Box
             sx={{
               position: 'absolute',
@@ -303,38 +323,54 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
           fontWeight={isCurrentTrack ? 600 : 400}
           color={isCurrentTrack ? 'primary.main' : 'text.primary'}
           noWrap
-          onClick={(e) => { e.stopPropagation(); navigate(`/track/${track.provider}/${track.providerId}`); }}
-          sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+          onClick={linkTitleToTrack ? handleOpenTrack : undefined}
+          sx={{
+            cursor: linkTitleToTrack ? 'pointer' : 'default',
+            '&:hover': linkTitleToTrack ? { textDecoration: 'underline' } : undefined,
+          }}
         >
-          {track.title}
+          {displayTitle}
         </Typography>
+        {!hideSecondaryText && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            sx={{
+              maxWidth: '100%',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              '& .artist-link:hover': { color: 'text.primary', textDecoration: 'underline' },
+            }}
+          >
+            {parseArtistNames(track.artist).map((name, idx, arr) => (
+              <span key={idx}>
+                <span
+                  onClick={(e) => { e.stopPropagation(); navigate(`/artist/${encodeURIComponent(name)}`); }}
+                  style={{ cursor: 'pointer' }}
+                  className="artist-link"
+                >
+                  {name}
+                </span>
+                {idx < arr.length - 1 && <span>{', '}</span>}
+              </span>
+            ))}
+          </Typography>
+        )}
+      </Box>
+
+      {showAlbumRight && (
         <Typography
           variant="caption"
           color="text.secondary"
           noWrap
-          sx={{
-            display: 'flex',
-            flexWrap: 'nowrap',
-            maxWidth: '100%',
-            overflow: 'hidden',
-            '& .artist-link:hover': { color: 'text.primary', textDecoration: 'underline' },
-          }}
+          textAlign="right"
+          sx={{ minWidth: 0, pr: 1 }}
         >
-          {parseArtists(track.artist).map((a, idx) => (
-            <span key={idx}>
-              <span
-                onClick={(e) => { e.stopPropagation(); navigate(`/artist/${encodeURIComponent(a.name)}`); }}
-                style={{ cursor: 'pointer' }}
-                className="artist-link"
-              >
-                {a.name}
-              </span>
-              {a.separator && <span>{a.separator}</span>}
-            </span>
-          ))}
-          {track.album && <span> • {track.album}</span>}
+          {formatAlbumName(track.album) || '-'}
         </Typography>
-      </Box>
+      )}
 
       {/* Duration */}
       <Typography variant="caption" color="text.secondary" textAlign="right" sx={{ minWidth: 40 }}>
@@ -344,7 +380,7 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
       {/* Actions */}
       <Box sx={{ display: 'flex', alignItems: 'center' }}>
         {isLoggedIn && (
-          <Tooltip title={liked ? 'Remove from liked' : 'Add to liked'}>
+          <Tooltip title={liked ? 'Убрать из любимых' : 'Добавить в любимые'}>
             <IconButton
               size="small"
               onClick={handleLike}
@@ -376,29 +412,31 @@ export function TrackRow({ track, index, showIndex, queue, likedSet, onAddToPlay
       >
         <MenuItem onClick={() => { useQueueStore.getState().addNext(track); setMenuAnchor(null); }}>
           <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Play next</ListItemText>
+          <ListItemText>Слушать следующим</ListItemText>
         </MenuItem>
         <MenuItem onClick={() => { useQueueStore.getState().addToQueue(track); setMenuAnchor(null); }}>
           <ListItemIcon><QueueMusicIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Add to queue</ListItemText>
+          <ListItemText>Добавить в очередь</ListItemText>
         </MenuItem>
         {onAddToPlaylist && (
           <MenuItem onClick={() => { onAddToPlaylist(track); setMenuAnchor(null); }}>
             <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Add to playlist</ListItemText>
+            <ListItemText>Добавить в плейлист</ListItemText>
           </MenuItem>
         )}
         {isLoggedIn && (
           <MenuItem onClick={handleCache}>
             <ListItemIcon><CloudDownloadIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Cache for offline</ListItemText>
+            <ListItemText>Сохранить для офлайна</ListItemText>
           </MenuItem>
         )}
         <MenuItem component="a" href={providerUrl} target="_blank" rel="noopener noreferrer">
           <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Open source</ListItemText>
+          <ListItemText>Открыть источник</ListItemText>
         </MenuItem>
       </Menu>
     </Box>
   );
 }
+
+

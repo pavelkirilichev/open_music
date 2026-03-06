@@ -2,21 +2,16 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
-  Button,
-  Card,
-  CardContent,
-  Grid,
   IconButton,
   Tooltip,
 } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PersonIcon from '@mui/icons-material/Person';
 import { useLikedTracks, useLibraryAlbums, useLibraryArtists, useLikedIds, useRemoveLibraryArtist, useRemoveLibraryAlbum } from '../api/hooks/useLibrary';
-import { usePlaylists, useCreatePlaylist } from '../api/hooks/usePlaylists';
 import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
+import { canonicalizeArtistName, formatAlbumName, formatArtistNames } from '../utils/trackText';
 
 export function LibraryPage() {
   const navigate = useNavigate();
@@ -25,17 +20,8 @@ export function LibraryPage() {
   const { data: likedSet } = useLikedIds(likedData?.tracks ?? []);
   const { data: albums, isLoading: albumsLoading } = useLibraryAlbums();
   const { data: artists, isLoading: artistsLoading } = useLibraryArtists();
-  const { data: playlists, isLoading: playlistsLoading } = usePlaylists();
-  const { mutate: createPlaylist } = useCreatePlaylist();
   const { mutate: removeArtist } = useRemoveLibraryArtist();
   const { mutate: removeAlbum } = useRemoveLibraryAlbum();
-
-  const handleCreatePlaylist = () => {
-    createPlaylist(
-      { name: `My Playlist #${(playlists?.length ?? 0) + 1}` },
-      { onSuccess: (pl) => navigate(`/playlist/${pl.id}`) },
-    );
-  };
 
   const artistList = (artists as Array<{ id: string; artistRef: Record<string, string> }>) ?? [];
   const albumList = (albums as Array<{ id: string; albumRef: Record<string, string> }>) ?? [];
@@ -71,7 +57,7 @@ export function LibraryPage() {
                 }}
               >
                 <Box
-                  onClick={() => navigate(`/artist/${encodeURIComponent(a.artistRef.name)}`)}
+                  onClick={() => navigate(`/artist/${encodeURIComponent(canonicalizeArtistName(a.artistRef.name))}`)}
                   sx={{
                     width: 100,
                     height: 100,
@@ -90,9 +76,9 @@ export function LibraryPage() {
                   variant="body2"
                   fontWeight={600}
                   noWrap
-                  onClick={() => navigate(`/artist/${encodeURIComponent(a.artistRef.name)}`)}
+                  onClick={() => navigate(`/artist/${encodeURIComponent(canonicalizeArtistName(a.artistRef.name))}`)}
                 >
-                  {a.artistRef.name}
+                  {canonicalizeArtistName(a.artistRef.name)}
                 </Typography>
                 <Tooltip title="Удалить из библиотеки">
                   <IconButton
@@ -123,85 +109,47 @@ export function LibraryPage() {
                 key={a.id}
                 sx={{
                   cursor: 'pointer',
-                  '&:hover': { opacity: 0.85 },
-                  transition: 'opacity 0.2s',
                   flexShrink: 0,
                   width: 150,
                   position: 'relative',
+                  '&:hover .album-remove-btn': {
+                    opacity: 1,
+                    transform: 'scale(1)',
+                  },
                 }}
               >
-                <Box onClick={() => navigate(`/album/${a.albumRef.mbid}`)}>
+                <Box onClick={() => navigate(`/album/${a.albumRef.mbid}`)} sx={{ position: 'relative' }}>
                   <ArtworkImage src={a.albumRef.artworkUrl} size={150} borderRadius={1} />
+                  <Tooltip title="Удалить из библиотеки">
+                    <IconButton
+                      className="album-remove-btn"
+                      size="small"
+                      onClick={(e) => { e.stopPropagation(); removeAlbum(a.id); }}
+                      sx={{
+                        position: 'absolute',
+                        top: 6,
+                        right: 6,
+                        opacity: 0,
+                        transform: 'scale(0.96)',
+                        transition: 'opacity 0.2s, transform 0.2s',
+                        backgroundColor: 'rgba(0,0,0,0.58)',
+                        color: '#fff',
+                        '&:hover': { backgroundColor: 'rgba(0,0,0,0.78)' },
+                      }}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                   <Typography variant="body2" fontWeight={600} noWrap mt={1}>
-                    {a.albumRef.title}
+                    {formatAlbumName(a.albumRef.title)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" noWrap>
-                    {a.albumRef.artist}
+                    {formatArtistNames(a.albumRef.artist)}
                   </Typography>
                 </Box>
-                <Tooltip title="Удалить из библиотеки">
-                  <IconButton
-                    size="small"
-                    onClick={(e) => { e.stopPropagation(); removeAlbum(a.id); }}
-                    sx={{ mt: 0.5, opacity: 0.5, '&:hover': { opacity: 1 } }}
-                  >
-                    <DeleteOutlineIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
               </Box>
             ))}
           </Box>
-        </Box>
-      )}
-
-      {/* ── Playlists ── */}
-      {playlistsLoading ? (
-        <LoadingSpinner />
-      ) : (
-        <Box sx={{ mb: 4 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-            <Typography variant="h6" fontWeight={700}>
-              Плейлисты
-            </Typography>
-            <Button startIcon={<AddIcon />} variant="outlined" size="small" onClick={handleCreatePlaylist}>
-              Новый
-            </Button>
-          </Box>
-          {playlists?.length === 0 ? (
-            <EmptyState message="Плейлистов пока нет. Создайте первый!" />
-          ) : (
-            <Grid container spacing={2}>
-              {playlists?.map((pl) => (
-                <Grid item xs={6} sm={4} md={3} key={pl.id}>
-                  <Card
-                    onClick={() => navigate(`/playlist/${pl.id}`)}
-                    sx={{ cursor: 'pointer', '&:hover': { backgroundColor: '#282828' } }}
-                  >
-                    <Box
-                      sx={{
-                        height: 150,
-                        backgroundColor: '#282828',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 48,
-                      }}
-                    >
-                      🎵
-                    </Box>
-                    <CardContent sx={{ pb: '12px !important' }}>
-                      <Typography variant="body2" fontWeight={600} noWrap>
-                        {pl.name}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {pl._count?.tracks ?? 0} треков
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              ))}
-            </Grid>
-          )}
         </Box>
       )}
 
@@ -223,6 +171,7 @@ export function LibraryPage() {
               showIndex
               queue={likedData.tracks}
               likedSet={likedSet}
+              showAlbumRight
             />
           ))
         )}

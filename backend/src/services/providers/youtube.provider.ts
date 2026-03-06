@@ -50,12 +50,63 @@ interface YtDlpInfo {
   creator?: string;
 }
 
+const OFFICIAL_ARTIST_BY_KEY: Record<string, string> = {
+  redo: 'REDO',
+  oxxxymiron: 'Oxxxymiron',
+  mironfyodorov: 'Oxxxymiron',
+  mironfedorov: 'Oxxxymiron',
+  миронфёдоров: 'Oxxxymiron',
+  миронфедоров: 'Oxxxymiron',
+  ram: 'RAM',
+  kommo: 'Kommo',
+};
+
+function normalizeArtistKey(name: string): string {
+  return name.toLowerCase().replace(/[^\p{L}\d]/gu, '');
+}
+
+function normalizeArtistName(raw: string): string {
+  const descriptorRegex =
+    /^(?:official|audio|video|lyrics?|acoustic|акустич\w*|live|концерт|reaction|реакц|review|обзор|teaser|тизер|snippet|snipp?et|preview|превью|clip|клип|cover|кавер|karaoke|караоке)$/i;
+
+  const cleaned = raw
+    .replace(/[•·]/g, ', ')
+    .replace(/\s*-\s*topic$/i, '')
+    .replace(/\s*official(?:\s+artist)?\s+channel$/i, '')
+    .trim();
+
+  if (!cleaned) return cleaned;
+
+  const parts = cleaned
+    .split(/\s*(?:,|&|\/|;|\|)\s*/g)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) {
+    const key = normalizeArtistKey(cleaned);
+    return OFFICIAL_ARTIST_BY_KEY[key] ?? cleaned;
+  }
+
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const p of parts) {
+    if (descriptorRegex.test(p)) continue;
+    const key = normalizeArtistKey(p);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(OFFICIAL_ARTIST_BY_KEY[key] ?? p);
+  }
+
+  return deduped.length > 0 ? deduped.join(', ') : cleaned;
+}
+
 function parseYouTubeTitle(raw: string): { artist: string; title: string } | null {
   const cleaned = raw
     .replace(/\s*[\[(](?:Official\s*(?:Video|Audio|Music\s*Video)|Lyrics?|HD|HQ|4K|MV|Topic)[\])]?/gi, '')
     .replace(/\s*\|\s*.*$/, '')
     .trim();
-  const match = cleaned.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  // Parse only "Artist - Title", not hyphenated words like "Черно-белый".
+  const match = cleaned.match(/^(.+?)\s+[-–—]\s+(.+)$/);
   if (match) {
     const artist = match[1].trim();
     const title = match[2].trim();
@@ -66,16 +117,22 @@ function parseYouTubeTitle(raw: string): { artist: string; title: string } | nul
   return null;
 }
 
-/** Filter out compilations, full albums, snippets — keep individual tracks only */
-const COMPILATION_RE = /(?:compilation|best\s+of|full\s+album|полный\s+альбом|сборник|подборка|лучшие|топ\s+\d|playlist|плейлист|\bmix\b|\bмикс\b)/i;
+/** Filter out compilations, full albums, snippets - keep individual tracks only */
+const COMPILATION_RE =
+  /(?:compilation|best\s+of|full\s+album|полный\s+альбом|сборник|подборка|лучшие|топ\s+\d|playlist|плейлист|\bmix\b|\bмикс\b)/i;
+const NON_TRACK_RE =
+  /(?:reaction|реакц|обзор|review|тизер|teaser|snippet|snipp?et|preview|превью|live|концерт|cover|кавер|karaoke|караоке|shorts|подкаст|интервью|interview|разбор|analysis|amv|clip|клип|behind\s+the\s+scenes|making\s+of)/i;
 
 function isIndividualTrack(t: TrackMeta): boolean {
-  // No duration info → keep (can't filter)
+  const text = `${t.title} ${t.artist ?? ''}`;
+  if (NON_TRACK_RE.test(text)) return false;
+  // No duration info -> keep (can't filter)
   if (t.duration == null) return true;
-  // Snippets < 30s
-  if (t.duration < 30) return false;
-  // Full albums / compilations > 10 min
-  if (t.duration > 600) return false;
+  // Snippets
+  // Keep very short skits/interludes (album pages rely on these).
+  if (t.duration < 8) return false;
+  // Very long videos are usually not track versions
+  if (t.duration > 900) return false;
   // Title heuristics
   if (COMPILATION_RE.test(t.title)) return false;
   return true;
@@ -167,7 +224,7 @@ export class YoutubeProvider extends BaseProvider {
     const cached = await redis.get(cacheKey);
     if (cached) return cached;
 
-    // Format priority: m4a (AAC) → mp4 audio → any audio
+    // Format priority: m4a (AAC) -> mp4 audio -> any audio
     // AAC/m4a is supported by ALL browsers; webm/opus fails on Safari and some mobile browsers.
     // Format 140 = YouTube's standard 128kbps AAC m4a (always available).
     const stdout = await runYtdlp([
@@ -203,6 +260,7 @@ export class YoutubeProvider extends BaseProvider {
     }
 
     artist = artist ?? info.channel ?? info.uploader ?? 'Unknown';
+    artist = normalizeArtistName(artist);
     title = title ?? info.title;
 
     // Always construct thumbnail from video ID (works for all public videos)
@@ -222,3 +280,4 @@ export class YoutubeProvider extends BaseProvider {
     };
   }
 }
+

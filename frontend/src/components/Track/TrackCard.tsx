@@ -11,25 +11,12 @@ import { usePlayerStore } from '../../store/player.store';
 import { useQueueStore } from '../../store/queue.store';
 import { useLikeTrack, useUnlikeTrack } from '../../api/hooks/useLibrary';
 import { useAuthStore } from '../../store/auth.store';
-
-function parseArtists(artistStr: string): Array<{ name: string; separator?: string }> {
-  const parts: Array<{ name: string; separator?: string }> = [];
-  const regex = /( ft\. | feat\. | featuring | & |, )/i;
-  const tokens = artistStr.split(regex);
-  tokens.forEach((token) => {
-    if (regex.test(token)) {
-      if (parts.length > 0) parts[parts.length - 1].separator = token;
-    } else if (token.trim()) {
-      parts.push({ name: token.trim() });
-    }
-  });
-  return parts;
-}
+import { formatAlbumName, parseArtistNames, sanitizeTrackTitle } from '../../utils/trackText';
 
 interface TrackCardProps {
   track: Track;
   queue?: Track[];
-  likedSet?: Set<string>; // "provider:providerId" — passed from parent, avoids N+1
+  likedSet?: Set<string>; // "provider:providerId" passed from parent, avoids N+1
 }
 
 export function TrackCard({ track, queue, likedSet }: TrackCardProps) {
@@ -41,6 +28,7 @@ export function TrackCard({ track, queue, likedSet }: TrackCardProps) {
   const isCurrentTrack =
     currentQueueTrack?.provider === track.provider &&
     currentQueueTrack?.providerId === track.providerId;
+  const displayTitle = sanitizeTrackTitle(track.title, track.artist);
 
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const liked = likedSet?.has(`${track.provider}:${track.providerId}`) ?? false;
@@ -115,10 +103,9 @@ export function TrackCard({ track, queue, likedSet }: TrackCardProps) {
               variant="body2"
               fontWeight={600}
               noWrap
-              onClick={(e) => { e.stopPropagation(); navigate(`/track/${track.provider}/${track.providerId}`); }}
-              sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+              sx={{ cursor: 'default' }}
             >
-              {track.title}
+              {displayTitle}
             </Typography>
             <Typography
               variant="caption"
@@ -132,23 +119,23 @@ export function TrackCard({ track, queue, likedSet }: TrackCardProps) {
                 textOverflow: 'ellipsis',
               }}
             >
-              {parseArtists(track.artist).map((a, idx) => (
+              {parseArtistNames(track.artist).map((name, idx, arr) => (
                 <span key={idx}>
                   <span
-                    onClick={(e) => { e.stopPropagation(); navigate(`/artist/${encodeURIComponent(a.name)}`); }}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/artist/${encodeURIComponent(name)}`); }}
                     style={{ cursor: 'pointer' }}
                     className="artist-link"
                   >
-                    {a.name}
+                    {name}
                   </span>
-                  {a.separator && <span>{a.separator}</span>}
+                  {idx < arr.length - 1 && <span>{', '}</span>}
                 </span>
               ))}
-              {track.album && <span> · {track.album}</span>}
+              {track.album && <span> - {formatAlbumName(track.album)}</span>}
             </Typography>
           </Box>
           {isLoggedIn && (
-            <Tooltip title={liked ? 'Unlike' : 'Like'}>
+            <Tooltip title={liked ? 'Убрать из любимых' : 'Добавить в любимые'}>
               <IconButton
                 size="small"
                 onClick={handleLike}
@@ -173,3 +160,4 @@ export function TrackCard({ track, queue, likedSet }: TrackCardProps) {
     </Card>
   );
 }
+

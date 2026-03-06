@@ -12,7 +12,7 @@ interface ArtworkImageProps {
 
 export function ArtworkImage({
   src,
-  alt = 'Album artwork',
+  alt = 'Обложка альбома',
   size = 56,
   borderRadius = 1,
   sx,

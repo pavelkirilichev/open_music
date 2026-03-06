@@ -19,7 +19,7 @@ export function PlayerVolume() {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 120 }}>
-      <Tooltip title={muted ? 'Unmute' : 'Mute'}>
+      <Tooltip title={muted ? 'Включить звук' : 'Выключить звук'}>
         <IconButton size="small" onClick={toggleMute}>
           <VolumeIcon fontSize="small" />
         </IconButton>
@@ -32,7 +32,7 @@ export function PlayerVolume() {
         onChange={(_, v) => setVolume(v as number)}
         size="small"
         sx={{ width: 80 }}
-        aria-label="Volume"
+        aria-label="Громкость"
       />
     </Box>
   );

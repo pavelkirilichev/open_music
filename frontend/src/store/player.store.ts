@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { Track } from '../types';
 import { useQueueStore } from './queue.store';
 
@@ -29,100 +30,135 @@ interface PlayerState {
   initAudioContext: () => void;
 }
 
-export const usePlayerStore = create<PlayerState>((set, get) => ({
-  isPlaying: false,
-  volume: 0.8,
-  muted: false,
-  currentTime: 0,
-  duration: 0,
-  buffered: 0,
-  error: null,
-  audioEl: null,
-  audioCtx: null,
-  analyser: null,
+export const usePlayerStore = create<PlayerState>()(
+  persist(
+    (set, get) => ({
+      isPlaying: false,
+      volume: 0.8,
+      muted: false,
+      currentTime: 0,
+      duration: 0,
+      buffered: 0,
+      error: null,
+      audioEl: null,
+      audioCtx: null,
+      analyser: null,
 
-  setAudioEl: (el) => set({ audioEl: el }),
+      setAudioEl: (el) => {
+        const { volume, muted } = get();
+        el.volume = Math.max(0, Math.min(1, volume));
+        el.muted = muted;
+        set({ audioEl: el });
+      },
 
-  play: (track) => {
-    const { audioEl } = get();
-    if (!audioEl) return;
+      play: (track) => {
+        const { audioEl } = get();
+        if (!audioEl) return;
 
-    if (track) {
-      // Pause first to abort any pending play() promise and avoid AbortError
-      audioEl.pause();
-      const streamUrl = `/api/stream/${track.provider}/${track.providerId}`;
-      audioEl.src = streamUrl;
-      audioEl.load();
-    }
+        if (track) {
+          // Pause first to abort any pending play() promise and avoid AbortError
+          audioEl.pause();
+          const streamUrl = `/api/stream/${track.provider}/${track.providerId}`;
+          audioEl.src = streamUrl;
+          audioEl.load();
+          set({ currentTime: 0, duration: 0, buffered: 0 });
+        }
 
-    audioEl.play().catch((err) => {
-      // AbortError is expected when switching tracks rapidly — not a real error
-      if ((err as DOMException).name === 'AbortError') return;
-      set({ error: String(err), isPlaying: false });
-    });
-    set({ isPlaying: true, error: null });
-  },
+        audioEl.play().catch((err) => {
+          // AbortError is expected when switching tracks rapidly — not a real error
+          if ((err as DOMException).name === 'AbortError') return;
+          set({ error: String(err), isPlaying: false });
+        });
+        set({ isPlaying: true, error: null });
+      },
 
-  pause: () => {
-    const { audioEl } = get();
-    audioEl?.pause();
-    set({ isPlaying: false });
-  },
+      pause: () => {
+        const { audioEl } = get();
+        audioEl?.pause();
+        set({ isPlaying: false });
+      },
 
-  togglePlay: () => {
-    const { isPlaying, audioEl } = get();
-    if (!audioEl?.src) {
-      // Play current track from queue
-      const track = useQueueStore.getState().currentTrack();
-      if (track) get().play(track);
-      return;
-    }
-    if (isPlaying) get().pause();
-    else get().play();
-  },
+      togglePlay: () => {
+        const { isPlaying, audioEl } = get();
+        if (!audioEl?.src) {
+          // Play current track from queue
+          const track = useQueueStore.getState().currentTrack();
+          if (track) get().play(track);
+          return;
+        }
+        if (isPlaying) get().pause();
+        else get().play();
+      },
 
-  seek: (time) => {
-    const { audioEl } = get();
-    if (audioEl) {
-      audioEl.currentTime = time;
-      set({ currentTime: time });
-    }
-  },
+      seek: (time) => {
+        const { audioEl } = get();
+        if (audioEl) {
+          audioEl.currentTime = time;
+          set({ currentTime: time });
+        }
+      },
 
-  setVolume: (vol) => {
-    const { audioEl } = get();
-    if (audioEl) audioEl.volume = vol;
-    set({ volume: vol, muted: vol === 0 });
-  },
+      setVolume: (vol) => {
+        const safeVolume = Math.max(0, Math.min(1, vol));
+        const { audioEl } = get();
+        if (audioEl) audioEl.volume = safeVolume;
+        set({ volume: safeVolume, muted: safeVolume === 0 });
+      },
 
-  toggleMute: () => {
-    const { audioEl, muted, volume } = get();
-    if (!audioEl) return;
-    const newMuted = !muted;
-    audioEl.muted = newMuted;
-    set({ muted: newMuted });
-    if (!newMuted && volume === 0) {
-      get().setVolume(0.5);
-    }
-  },
+      toggleMute: () => {
+        const { audioEl, muted, volume } = get();
+        const newMuted = !muted;
+        if (audioEl) audioEl.muted = newMuted;
+        set({ muted: newMuted });
+        if (!newMuted && volume === 0) {
+          get().setVolume(0.5);
+        }
+      },
 
-  setCurrentTime: (t) => set({ currentTime: t }),
-  setDuration: (d) => set({ duration: d }),
-  setBuffered: (b) => set({ buffered: b }),
-  setError: (err) => set({ error: err }),
+      setCurrentTime: (t) => set({ currentTime: t }),
+      setDuration: (d) => set({ duration: d }),
+      setBuffered: (b) => set({ buffered: b }),
+      setError: (err) => set({ error: err }),
 
-  initAudioContext: () => {
-    const { audioEl, audioCtx } = get();
-    if (audioCtx || !audioEl) return;
+      initAudioContext: () => {
+        const { audioEl, audioCtx } = get();
+        if (audioCtx || !audioEl) return;
 
-    const ctx = new AudioContext();
-    const source = ctx.createMediaElementSource(audioEl);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
+        const ctx = new AudioContext();
+        const source = ctx.createMediaElementSource(audioEl);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
 
-    source.connect(analyser);
-    analyser.connect(ctx.destination);
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
 
-    set({ audioCtx: ctx, analyser });
-  },
-}));
+        set({ audioCtx: ctx, analyser });
+      },
+    }),
+    {
+      name: 'player-settings-storage',
+      partialize: (state) => ({
+        volume: state.volume,
+        muted: state.muted,
+      }),
+      merge: (persistedState, currentState) => {
+        const incoming = persistedState as Partial<PlayerState> | undefined;
+        const merged = { ...currentState, ...incoming };
+        const safeVolume = Math.max(0, Math.min(1, Number(merged.volume ?? 0.8)));
+        return {
+          ...merged,
+          volume: safeVolume,
+          muted: Boolean(merged.muted) || safeVolume === 0,
+          isPlaying: false,
+          currentTime: 0,
+          duration: 0,
+          buffered: 0,
+          error: null,
+          audioEl: null,
+          audioCtx: null,
+          analyser: null,
+        };
+      },
+    },
+  ),
+);

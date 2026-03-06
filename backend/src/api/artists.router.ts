@@ -455,14 +455,33 @@ function normStr(s: string): string {
 }
 
 function titleSimilar(a: string, b: string): boolean {
-  const na = normStr(a);
-  const nb = normStr(b);
+  const clean = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[\(\[\{]\s*(?:feat\.?|ft\.?|featuring)[^\)\]\}]*[\)\]\}]/gi, ' ')
+      .replace(/\s*(?:feat\.?|ft\.?|featuring)\s+.*$/gi, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+  const na = normStr(clean(a));
+  const nb = normStr(clean(b));
   if (!na || !nb) return false;
-  return na.includes(nb) || nb.includes(na);
+  if (na === nb) return true;
+  const [longer, shorter] = na.length >= nb.length ? [na, nb] : [nb, na];
+  if (longer.startsWith(shorter) && shorter.length >= 4) return true;
+  if (shorter.length < longer.length * 0.6) return false;
+  return longer.includes(shorter);
 }
+
+const NON_TRACK_RE =
+  /(?:reaction|реакц|обзор|review|тизер|teaser|snippet|snipp?et|preview|превью|live|концерт|cover|кавер|karaoke|караоке|shorts|подкаст|интервью|interview|разбор|analysis|amv|clip|клип|behind\s+the\s+scenes|making\s+of)/i;
 
 const providerTracksSchema = z.object({
   name: z.string().min(1).max(200),
+  albumMbid: z
+    .string()
+    .regex(/^[0-9a-f-]{36}$/i)
+    .optional(),
 });
 
 artistsRouter.get(
@@ -470,8 +489,8 @@ artistsRouter.get(
   validate(providerTracksSchema, 'query'),
   async (req, res, next) => {
     try {
-      const { name } = req.query as z.infer<typeof providerTracksSchema>;
-      const cacheKey = `artist:provider-tracks:v2:${Buffer.from(name).toString('base64')}`;
+      const { name, albumMbid } = req.query as z.infer<typeof providerTracksSchema>;
+      const cacheKey = `artist:provider-tracks:v3:${Buffer.from(name).toString('base64')}:${albumMbid ?? 'all'}`;
 
       const cached = cacheGet<{ tracks: TrackMeta[] }>(cacheKey);
       if (cached) return res.json(cached);
@@ -500,9 +519,48 @@ artistsRouter.get(
       const rgData = (await rgRes.json()) as MBReleaseGroupResponse;
       const releaseGroups = rgData['release-groups'] ?? [];
 
-      // Step 3: For each release group, get tracklist from MusicBrainz
-      // Limit to 15 albums to keep response time reasonable (~17s for MB + parallel YT searches)
-      const albumsToFetch = releaseGroups.slice(0, 15);
+      // Step 3: Decide which albums to fetch.
+      // By default: first 15 albums to keep response time reasonable.
+      // If albumMbid is provided: focus only that album for better match quality.
+      let albumsToFetch: MBReleaseGroup[] = [];
+      if (albumMbid) {
+        const exact = releaseGroups.find((rg) => rg.id === albumMbid);
+        if (exact) {
+          albumsToFetch = [exact];
+        } else {
+          await delay(1100);
+          try {
+            const rgByIdRes = await fetch(
+              `${MB_BASE}/release-group/${encodeURIComponent(albumMbid)}?fmt=json`,
+              { headers: { 'User-Agent': MB_UA } },
+            );
+            if (rgByIdRes.ok) {
+              const rgById = (await rgByIdRes.json()) as {
+                id: string;
+                title: string;
+                'primary-type'?: string;
+                'secondary-types'?: string[];
+                'first-release-date'?: string;
+              };
+              albumsToFetch = [
+                {
+                  id: rgById.id,
+                  title: rgById.title,
+                  'primary-type': rgById['primary-type'],
+                  'secondary-types': rgById['secondary-types'],
+                  'first-release-date': rgById['first-release-date'],
+                },
+              ];
+            }
+          } catch (err) {
+            logger.warn(`Failed to fetch release-group by id ${albumMbid}`, { err });
+          }
+        }
+      } else {
+        albumsToFetch = releaseGroups.slice(0, 15);
+      }
+
+      if (albumsToFetch.length === 0) return res.json({ tracks: [] });
       interface MBAlbumTrack {
         title: string;
         duration: number | null; // seconds
@@ -587,40 +645,119 @@ artistsRouter.get(
       // Step 5: Match MB tracks → YouTube tracks
       const matchedTracks: TrackMeta[] = [];
       const usedYt = new Set<string>();
+      const matchedMb = new Set<string>();
+
+      const mbKey = (mbt: MBAlbumTrack) =>
+        `${mbt.albumMbid}:${mbt.position}:${normStr(mbt.title)}`;
+
+      const canMatch = (mbt: MBAlbumTrack, yt: TrackMeta): boolean => {
+        const text = `${yt.title} ${yt.artist ?? ''}`;
+        if (NON_TRACK_RE.test(text)) return false;
+        if (!titleSimilar(mbt.title, yt.title)) return false;
+        const ya = normStr(yt.artist ?? '');
+        const aa = normStr(artistName);
+        const sameArtist =
+          !ya ||
+          !aa ||
+          ya.includes(aa) ||
+          aa.includes(ya) ||
+          titleSimilar(ya, aa);
+        if (!sameArtist) return false;
+        if (mbt.duration && yt.duration && Math.abs(mbt.duration - yt.duration) > 90) {
+          return false;
+        }
+        const minDuration = albumMbid ? 8 : 15;
+        if (yt.duration && (yt.duration > 1200 || yt.duration < minDuration)) return false;
+        return true;
+      };
 
       for (const mbt of mbTracks) {
-        // Find best YouTube match by title similarity
         let bestMatch: TrackMeta | null = null;
         for (const yt of ytTracks) {
           const ytKey = `${yt.provider}:${yt.providerId}`;
           if (usedYt.has(ytKey)) continue;
-          if (titleSimilar(mbt.title, yt.title)) {
-            // Duration check: if both have duration, reject if difference > 30s
-            if (mbt.duration && yt.duration) {
-              if (Math.abs(mbt.duration - yt.duration) > 30) continue;
-            }
-            // Reject compilations / snippets
-            if (yt.duration && (yt.duration > 600 || yt.duration < 30)) continue;
-            bestMatch = yt;
-            break;
-          }
+          if (!canMatch(mbt, yt)) continue;
+          bestMatch = yt;
+          break;
         }
 
-        if (bestMatch) {
-          usedYt.add(`${bestMatch.provider}:${bestMatch.providerId}`);
-          // Use MusicBrainz metadata but YouTube provider info
-          matchedTracks.push({
-            id: bestMatch.id,
-            provider: bestMatch.provider,
-            providerId: bestMatch.providerId,
-            title: mbt.title,           // canonical MusicBrainz title
-            artist: artistName,          // canonical MusicBrainz artist
-            album: mbt.album,
-            duration: mbt.duration ?? bestMatch.duration,
-            artworkUrl: bestMatch.artworkUrl,
-            year: mbt.album ? undefined : undefined,
-            score: bestMatch.score,
-          });
+        if (!bestMatch) continue;
+
+        usedYt.add(`${bestMatch.provider}:${bestMatch.providerId}`);
+        matchedMb.add(mbKey(mbt));
+        matchedTracks.push({
+          id: bestMatch.id,
+          provider: bestMatch.provider,
+          providerId: bestMatch.providerId,
+          title: mbt.title,
+          artist: artistName,
+          album: mbt.album,
+          albumMbid: mbt.albumMbid,
+          duration: mbt.duration ?? bestMatch.duration,
+          artworkUrl: bestMatch.artworkUrl,
+          year: undefined,
+          score: bestMatch.score,
+        });
+      }
+
+      if (albumMbid) {
+        const unmatched = mbTracks.filter((mbt) => !matchedMb.has(mbKey(mbt)));
+        if (unmatched.length > 0) {
+          for (const mbt of unmatched) {
+            let pool: TrackMeta[] = [];
+
+            try {
+              const strict = await searchAll({
+                query: `${artistName} ${mbt.album} ${mbt.title}`,
+                type: 'track',
+                limit: 50,
+              });
+              pool = strict.tracks;
+            } catch {
+              // ignore and try broader query below
+            }
+
+            let candidate = pool.find((yt) => {
+              const ytKey = `${yt.provider}:${yt.providerId}`;
+              if (usedYt.has(ytKey)) return false;
+              return canMatch(mbt, yt);
+            });
+
+            if (!candidate) {
+              try {
+                const broad = await searchAll({
+                  query: `${artistName} ${mbt.title}`,
+                  type: 'track',
+                  limit: 50,
+                });
+                candidate = broad.tracks.find((yt) => {
+                  const ytKey = `${yt.provider}:${yt.providerId}`;
+                  if (usedYt.has(ytKey)) return false;
+                  return canMatch(mbt, yt);
+                });
+              } catch {
+                // no-op
+              }
+            }
+
+            if (!candidate) continue;
+
+            usedYt.add(`${candidate.provider}:${candidate.providerId}`);
+            matchedMb.add(mbKey(mbt));
+            matchedTracks.push({
+              id: candidate.id,
+              provider: candidate.provider,
+              providerId: candidate.providerId,
+              title: mbt.title,
+              artist: artistName,
+              album: mbt.album,
+              albumMbid: mbt.albumMbid,
+              duration: mbt.duration ?? candidate.duration,
+              artworkUrl: candidate.artworkUrl,
+              year: undefined,
+              score: candidate.score,
+            });
+          }
         }
       }
 

@@ -39,7 +39,7 @@ export function PlayerControls() {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <Tooltip title={shuffle ? 'Shuffle: on' : 'Shuffle: off'}>
+      <Tooltip title={shuffle ? 'Перемешивание: включено' : 'Перемешивание: выключено'}>
         <IconButton
           size="small"
           onClick={toggleShuffle}
@@ -49,7 +49,7 @@ export function PlayerControls() {
         </IconButton>
       </Tooltip>
 
-      <Tooltip title="Previous">
+      <Tooltip title="Предыдущий трек">
         <span>
           <IconButton size="small" onClick={handlePrev} disabled={!hasPrev()}>
             <SkipPreviousIcon />
@@ -71,7 +71,7 @@ export function PlayerControls() {
         {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
       </IconButton>
 
-      <Tooltip title="Next">
+      <Tooltip title="Следующий трек">
         <span>
           <IconButton size="small" onClick={handleNext} disabled={!hasNext()}>
             <SkipNextIcon />
@@ -81,7 +81,11 @@ export function PlayerControls() {
 
       <Tooltip
         title={
-          repeat === 'none' ? 'Repeat: off' : repeat === 'all' ? 'Repeat: all' : 'Repeat: one'
+          repeat === 'none'
+            ? 'Повтор: выключен'
+            : repeat === 'all'
+              ? 'Повтор: все треки'
+              : 'Повтор: один трек'
         }
       >
         <IconButton

@@ -21,6 +21,7 @@ import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { Track } from '../types';
+import { canonicalizeArtistName, formatAlbumName, formatArtistNames } from '../utils/trackText';
 
 /** Merge + dedup albums from multiple sources by mbid */
 function mergeAlbums(
@@ -67,16 +68,24 @@ export function SearchPage() {
   const { data: libraryArtistsRaw } = useLibraryArtists();
   const { mutate: addArtist } = useAddLibraryArtist();
 
-  const savedMbids = new Set<string>(
-    ((libraryAlbumsRaw as Array<{ albumRef: { mbid?: string } }>) ?? [])
-      .map((a) => a.albumRef?.mbid)
-      .filter(Boolean) as string[],
+  const savedMbids = useMemo(
+    () =>
+      new Set<string>(
+        ((libraryAlbumsRaw as Array<{ albumRef: { mbid?: string } }>) ?? [])
+          .map((a) => a.albumRef?.mbid)
+          .filter(Boolean) as string[],
+      ),
+    [libraryAlbumsRaw],
   );
 
-  const savedArtistNames = new Set<string>(
-    ((libraryArtistsRaw as Array<{ artistRef: { name?: string } }>) ?? [])
-      .map((a) => a.artistRef?.name?.toLowerCase())
-      .filter(Boolean) as string[],
+  const savedArtistNames = useMemo(
+    () =>
+      new Set<string>(
+        ((libraryArtistsRaw as Array<{ artistRef: { name?: string } }>) ?? [])
+          .map((a) => canonicalizeArtistName(a.artistRef?.name ?? '').toLowerCase())
+          .filter(Boolean) as string[],
+      ),
+    [libraryArtistsRaw],
   );
 
   useEffect(() => { setPage(1); }, [q]);
@@ -104,6 +113,16 @@ export function SearchPage() {
     () => mergeAlbums(artistAlbums, textAlbums).slice(0, 12),
     [artistAlbums, textAlbums],
   );
+  const sortedAlbums = useMemo(() => {
+    if (!albums.length) return albums;
+    const saved: Array<AlbumItem & { artist: string }> = [];
+    const regular: Array<AlbumItem & { artist: string }> = [];
+    for (const album of albums) {
+      if (savedMbids.has(album.mbid)) saved.push(album);
+      else regular.push(album);
+    }
+    return [...saved, ...regular];
+  }, [albums, savedMbids]);
 
   // ── Filter tracks ──
   const tracks: Track[] = useMemo(() => {
@@ -114,10 +133,24 @@ export function SearchPage() {
       return true;
     });
   }, [trackData]);
+  const sortedTracks: Track[] = useMemo(() => {
+    if (!tracks.length || !likedSet) return tracks;
+    const saved: Track[] = [];
+    const regular: Track[] = [];
+    for (const track of tracks) {
+      const key = `${track.provider}:${track.providerId}`;
+      if (likedSet.has(key)) saved.push(track);
+      else regular.push(track);
+    }
+    return [...saved, ...regular];
+  }, [tracks, likedSet]);
 
   const totalTrackPages = trackData ? Math.ceil(trackData.total / 20) : 0;
   const albumsLoading = artistAlbumsLoading || textAlbumsLoading;
   const foundArtist = artistAlbumsData?.artist;
+  const displayFoundArtistName = foundArtist ? canonicalizeArtistName(foundArtist.name) : '';
+  const isFoundArtistSaved =
+    displayFoundArtistName.length > 0 && savedArtistNames.has(displayFoundArtistName.toLowerCase());
 
   return (
     <Box>
@@ -140,7 +173,7 @@ export function SearchPage() {
       {q && foundArtist && (
         <Box sx={{ mb: 3 }}>
           <Box
-            onClick={() => navigate(`/artist/${encodeURIComponent(foundArtist.name)}`)}
+            onClick={() => navigate(`/artist/${encodeURIComponent(displayFoundArtistName)}`)}
             sx={{
               display: 'flex',
               alignItems: 'center',
@@ -159,7 +192,7 @@ export function SearchPage() {
                 Исполнитель
               </Typography>
               <Typography variant="h6" fontWeight={700}>
-                {foundArtist.name}
+                {displayFoundArtistName}
               </Typography>
               {foundArtist.disambiguation && (
                 <Typography variant="caption" color="text.secondary">
@@ -167,22 +200,21 @@ export function SearchPage() {
                 </Typography>
               )}
             </Box>
-            {isLoggedIn && (() => {
-              const isSaved = savedArtistNames.has(foundArtist.name.toLowerCase());
-              return (
-                <Tooltip title={isSaved ? 'В библиотеке' : 'Добавить в библиотеку'}>
-                  <IconButton
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!isSaved) addArtist({ name: foundArtist.name, mbid: foundArtist.mbid });
-                    }}
-                    sx={{ color: isSaved ? 'primary.main' : 'text.secondary' }}
-                  >
-                    {isSaved ? <FavoriteIcon /> : <FavoriteBorderIcon />}
-                  </IconButton>
-                </Tooltip>
-              );
-            })()}
+            {isLoggedIn && (
+              <Tooltip title={isFoundArtistSaved ? 'В библиотеке' : 'Добавить в библиотеку'}>
+                <IconButton
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isFoundArtistSaved) {
+                      addArtist({ name: displayFoundArtistName, mbid: foundArtist.mbid });
+                    }
+                  }}
+                  sx={{ color: isFoundArtistSaved ? 'primary.main' : 'text.secondary' }}
+                >
+                  {isFoundArtistSaved ? <FavoriteIcon /> : <FavoriteBorderIcon />}
+                </IconButton>
+              </Tooltip>
+            )}
           </Box>
         </Box>
       )}
@@ -203,7 +235,7 @@ export function SearchPage() {
               '&::-webkit-scrollbar-thumb': { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 2 },
             }}
           >
-            {albums.map((album) => (
+            {sortedAlbums.map((album) => (
               <AlbumCard
                 key={album.mbid}
                 album={album}
@@ -212,8 +244,8 @@ export function SearchPage() {
                 onOpen={() => navigate(`/album/${album.mbid}`)}
                 onSave={() => addAlbum({
                   mbid: album.mbid,
-                  title: album.title,
-                  artist: album.artist,
+                  title: formatAlbumName(album.title),
+                  artist: formatArtistNames(album.artist),
                   artworkUrl: album.artworkUrl,
                   firstReleaseDate: album.firstReleaseDate,
                   type: album.type,
@@ -228,8 +260,8 @@ export function SearchPage() {
       {q && (
         tracksLoading || tracksFetching ? (
           <LoadingSpinner message="Загрузка треков..." />
-        ) : tracks.length === 0 ? (
-          !albumsLoading && albums.length === 0 && (
+        ) : sortedTracks.length === 0 ? (
+          !albumsLoading && sortedAlbums.length === 0 && (
             <Box textAlign="center" py={6}>
               <Typography color="text.secondary">
                 Ничего не найдено для &ldquo;{q}&rdquo;
@@ -259,13 +291,13 @@ export function SearchPage() {
                 <Box />
               </Box>
             )}
-            {tracks.map((track, i) => (
+            {sortedTracks.map((track, i) => (
               <TrackRow
                 key={`${track.provider}:${track.providerId}`}
                 track={track}
                 index={(page - 1) * 20 + i}
                 showIndex
-                queue={tracks}
+                queue={sortedTracks}
                 likedSet={likedSet}
               />
             ))}
@@ -299,6 +331,9 @@ interface AlbumCardProps {
 }
 
 function AlbumCard({ album, isSaved, isLoggedIn, onOpen, onSave }: AlbumCardProps) {
+  const displayAlbumTitle = formatAlbumName(album.title);
+  const displayArtistName = formatArtistNames(album.artist);
+
   return (
     <Box
       onClick={onOpen}
@@ -332,10 +367,10 @@ function AlbumCard({ album, isSaved, isLoggedIn, onOpen, onSave }: AlbumCardProp
         )}
       </Box>
       <Typography variant="body2" fontWeight={600} noWrap mt={1}>
-        {album.title}
+        {displayAlbumTitle}
       </Typography>
       <Typography variant="caption" color="text.secondary" noWrap>
-        {album.artist}
+        {displayArtistName}
         {album.firstReleaseDate ? ` \u2022 ${album.firstReleaseDate.slice(0, 4)}` : ''}
       </Typography>
     </Box>

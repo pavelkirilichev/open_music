@@ -3,15 +3,19 @@ import { Box, Typography, Chip, IconButton, Tooltip } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
-import { useAlbumDetail, AlbumTrack } from '../api/hooks/useArtist';
+import FavoriteIcon from '@mui/icons-material/Favorite';
+import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
+import { useAlbumDetail, AlbumTrack, useArtistProviderTracks } from '../api/hooks/useArtist';
 import { useSearch } from '../api/hooks/useSearch';
-import { useLikedIds } from '../api/hooks/useLibrary';
+import { useLikedIds, useAddLibraryAlbum, useRemoveLibraryAlbum, useLibraryAlbums } from '../api/hooks/useLibrary';
 import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { usePlayerStore } from '../store/player.store';
 import { useQueueStore } from '../store/queue.store';
+import { useAuthStore } from '../store/auth.store';
 import { Track } from '../types';
+import { canonicalizeArtistName, formatAlbumName } from '../utils/trackText';
 
 /** Strip noise from titles for fuzzy matching. Supports Cyrillic and any Unicode. */
 function normalise(s: string): string {
@@ -68,28 +72,36 @@ function formatDuration(seconds: number | null): string {
 
 export function AlbumPage() {
   const { mbid = '' } = useParams<{ mbid: string }>();
+  const albumArtworkUrl = `https://coverartarchive.org/release-group/${mbid}/front-500`;
   const navigate = useNavigate();
   const { data: album, isLoading } = useAlbumDetail(mbid);
 
   // Search providers by "artist album" to find streamable tracks for this album
-  const albumQuery = album ? `${album.artist} ${album.title}` : '';
+  const albumQuery = album
+    ? `${canonicalizeArtistName(album.artist)} ${formatAlbumName(album.title)}`
+    : '';
   const { data: searchData } = useSearch(
     { q: albumQuery, provider: 'all', type: 'track', page: 1, limit: 50 },
     albumQuery.length > 0,
   );
 
   // Also search by just artist name to cover more tracks
-  const artistQuery = album?.artist ?? '';
+  const artistQuery = album ? canonicalizeArtistName(album.artist) : '';
+  const { data: providerData } = useArtistProviderTracks(artistQuery, mbid);
   const { data: artistData } = useSearch(
     { q: artistQuery, provider: 'all', type: 'track', page: 1, limit: 30 },
     artistQuery.length > 0,
   );
 
-  // Merge both search results (prefer album-specific results)
+  // Merge provider-tracks (album-focused) + fallback search results
   const providerTracks: Track[] = (() => {
     const seen = new Set<string>();
     const merged: Track[] = [];
-    for (const t of [...(searchData?.tracks ?? []), ...(artistData?.tracks ?? [])]) {
+    for (const t of [
+      ...(providerData?.tracks ?? []),
+      ...(searchData?.tracks ?? []),
+      ...(artistData?.tracks ?? []),
+    ]) {
       const key = `${t.provider}:${t.providerId}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -100,16 +112,25 @@ export function AlbumPage() {
   })();
 
   // Build the playable queue (only MB tracks that have a provider match)
-  const albumArtist = album?.artist ?? '';
+  const albumArtist = album ? canonicalizeArtistName(album.artist) : '';
   const playableQueue: Track[] = [];
   for (const mbTrack of album?.tracks ?? []) {
     const match = findMatch(mbTrack, providerTracks, albumArtist);
     if (match && !playableQueue.find((t) => t.providerId === match.providerId)) {
-      playableQueue.push(match);
+      playableQueue.push({
+        ...match,
+        albumMbid: mbid,
+        album: album?.title ?? match.album,
+        artworkUrl: albumArtworkUrl,
+      });
     }
   }
 
   const { data: likedSet } = useLikedIds(playableQueue);
+  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const { data: libraryAlbumsRaw } = useLibraryAlbums();
+  const { mutate: addAlbum, isPending: isAddingAlbum } = useAddLibraryAlbum();
+  const { mutate: removeAlbum, isPending: isRemovingAlbum } = useRemoveLibraryAlbum();
   const { play, pause, isPlaying } = usePlayerStore();
   const { setQueue, currentTrack } = useQueueStore();
   const currentQueueTrack = currentTrack();
@@ -117,10 +138,32 @@ export function AlbumPage() {
   if (isLoading) return <LoadingSpinner message="Загрузка альбома..." />;
   if (!album) return null;
 
+  const libraryAlbums =
+    (libraryAlbumsRaw as Array<{ id: string; albumRef?: { mbid?: string } }> | undefined) ?? [];
+  const savedAlbumEntry = libraryAlbums.find((entry) => entry.albumRef?.mbid === mbid);
+  const isAlbumSaved = Boolean(savedAlbumEntry);
+  const albumActionPending = isAddingAlbum || isRemovingAlbum;
+
   const handlePlayAll = () => {
     if (!playableQueue.length) return;
     setQueue(playableQueue, 0);
     play(playableQueue[0]);
+  };
+
+  const handleToggleAlbumLike = () => {
+    if (!isLoggedIn) return;
+    if (savedAlbumEntry) {
+      removeAlbum(savedAlbumEntry.id);
+      return;
+    }
+    addAlbum({
+      mbid,
+      title: formatAlbumName(album.title),
+      artist: canonicalizeArtistName(album.artist),
+      artworkUrl: albumArtworkUrl,
+      firstReleaseDate: /^\d{4}$/.test(album.year) ? `${album.year}-01-01` : album.year,
+      type: album.type || 'album',
+    });
   };
 
   const isAlbumPlaying =
@@ -144,23 +187,23 @@ export function AlbumPage() {
         }}
       >
         <ArtworkImage
-          src={`https://coverartarchive.org/release-group/${mbid}/front-500`}
+          src={albumArtworkUrl}
           size={200}
           borderRadius={1}
         />
         <Box>
           <Chip label={album.type || 'Альбом'} size="small" variant="outlined" sx={{ mb: 1 }} />
           <Typography variant="h4" fontWeight={700}>
-            {album.title}
+            {formatAlbumName(album.title)}
           </Typography>
           <Typography
             variant="body1"
             color="text.secondary"
             mt={0.5}
             sx={{ cursor: 'pointer', '&:hover': { color: 'text.primary' } }}
-            onClick={() => navigate(`/artist/${encodeURIComponent(album.artist)}`)}
+            onClick={() => navigate(`/artist/${encodeURIComponent(canonicalizeArtistName(album.artist))}`)}
           >
-            {album.artist}
+            {canonicalizeArtistName(album.artist)}
           </Typography>
           <Typography variant="caption" color="text.secondary">
             {album.year}
@@ -187,6 +230,28 @@ export function AlbumPage() {
                 {isAlbumPlaying ? <PauseIcon /> : <PlayArrowIcon />}
               </IconButton>
             </Tooltip>
+            {isLoggedIn && (
+              <Tooltip title={isAlbumSaved ? 'Убрать из библиотеки' : 'Добавить в библиотеку'}>
+                <span>
+                  <IconButton
+                    onClick={handleToggleAlbumLike}
+                    disabled={albumActionPending}
+                    sx={{
+                      width: 40,
+                      height: 40,
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      color: isAlbumSaved ? 'primary.main' : 'text.secondary',
+                      '&:hover': {
+                        borderColor: 'rgba(255,255,255,0.35)',
+                        backgroundColor: 'rgba(255,255,255,0.06)',
+                      },
+                    }}
+                  >
+                    {isAlbumSaved ? <FavoriteIcon /> : <FavoriteBorderIcon />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            )}
           </Box>
         </Box>
       </Box>
@@ -197,7 +262,7 @@ export function AlbumPage() {
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: '32px 1fr auto 72px 32px',
+            gridTemplateColumns: '40px 48px 1fr 80px 40px',
             px: 2,
             py: 0.5,
             mb: 0.5,
@@ -205,17 +270,31 @@ export function AlbumPage() {
           }}
         >
           <Typography variant="caption" color="text.secondary" textAlign="center">#</Typography>
+          <Box />
           <Typography variant="caption" color="text.secondary">Название</Typography>
-          <Typography variant="caption" color="text.secondary">Источник</Typography>
           <Typography variant="caption" color="text.secondary" textAlign="right">Длит.</Typography>
           <Box />
         </Box>
 
         {album.tracks.map((mbTrack) => {
           const providerTrack = findMatch(mbTrack, providerTracks, albumArtist);
+          const enrichedTrack = providerTrack
+            ? playableQueue.find(
+                (t) =>
+                  t.provider === providerTrack.provider &&
+                  t.providerId === providerTrack.providerId,
+              ) ?? providerTrack
+            : undefined;
 
-          if (providerTrack) {
-            // Playable — render as full TrackRow but with MB position number
+          if (providerTrack && enrichedTrack) {
+            const albumStyledTrack: Track = {
+              ...enrichedTrack,
+              album: formatAlbumName(album.title),
+              albumMbid: mbid,
+              artworkUrl: albumArtworkUrl,
+            };
+
+            // Playable - render as full TrackRow but with MB position number
             return (
               <Box key={mbTrack.mbid} sx={{ position: 'relative' }}>
                 {/* Position number overlay */}
@@ -225,7 +304,7 @@ export function AlbumPage() {
                     left: 0,
                     top: 0,
                     bottom: 0,
-                    width: 32,
+                    width: 40,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -234,24 +313,28 @@ export function AlbumPage() {
                   }}
                 />
                 <TrackRow
-                  key={`${providerTrack.provider}:${providerTrack.providerId}`}
-                  track={providerTrack}
+                  key={`${albumStyledTrack.provider}:${albumStyledTrack.providerId}`}
+                  track={albumStyledTrack}
                   index={mbTrack.position - 1}
                   showIndex
                   queue={playableQueue}
                   likedSet={likedSet}
+                  hideSecondaryText
+                  appendFeatToTitle
+                  primaryArtistName={canonicalizeArtistName(album.artist)}
+                  linkTitleToTrack
                 />
               </Box>
             );
           }
 
-          // Not yet available from any provider — show as static row
+          // Not yet available from any provider - show as static row
           return (
             <Box
               key={mbTrack.mbid}
               sx={{
                 display: 'grid',
-                gridTemplateColumns: '32px 1fr auto 72px 32px',
+                gridTemplateColumns: '40px 48px 1fr 80px 40px',
                 alignItems: 'center',
                 gap: 1,
                 px: 2,
@@ -268,12 +351,12 @@ export function AlbumPage() {
               >
                 {mbTrack.position}
               </Typography>
+              <Box sx={{ width: 40, height: 40 }} />
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="body2" noWrap>
                   {mbTrack.title}
                 </Typography>
               </Box>
-              <Box />
               <Typography variant="caption" color="text.secondary" textAlign="right">
                 {formatDuration(mbTrack.duration)}
               </Typography>

@@ -103,12 +103,13 @@ export function useAlbumSearch(q: string, page = 1, enabled = true) {
  * Fetches streamable tracks for an artist from all providers,
  * using per-album searches for comprehensive coverage.
  */
-export function useArtistProviderTracks(name: string) {
+export function useArtistProviderTracks(name: string, albumMbid?: string) {
   return useQuery<ArtistProviderTracksData>({
-    queryKey: ['artist-provider-tracks', name],
+    queryKey: ['artist-provider-tracks', name, albumMbid],
     queryFn: () =>
       api.get<ArtistProviderTracksData>('/artists/provider-tracks', {
         name,
+        albumMbid,
       } as Record<string, unknown>),
     enabled: name.length > 0,
     staleTime: 1000 * 60 * 60,

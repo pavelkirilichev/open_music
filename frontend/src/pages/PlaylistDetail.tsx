@@ -54,7 +54,7 @@ export function PlaylistDetailPage() {
   const handleExport = () => {
     const link = document.createElement('a');
     link.href = `/api/playlists/${id}/export`;
-    link.download = `${playlist?.name ?? 'playlist'}.json`;
+    link.download = `${playlist?.name ?? 'плейлист'}.json`;
     link.click();
   };
 
@@ -75,18 +75,18 @@ export function PlaylistDetailPage() {
   };
 
   const handleDelete = () => {
-    if (!confirm('Delete this playlist?')) return;
+    if (!confirm('Удалить этот плейлист?')) return;
     deletePlaylist(id!, { onSuccess: () => navigate('/library') });
   };
 
-  if (isLoading) return <LoadingSpinner message="Loading playlist..." />;
+  if (isLoading) return <LoadingSpinner message="Загрузка плейлиста..." />;
   if (!playlist) return null;
 
   const totalDuration = tracks.reduce((sum, t) => sum + (t.duration ?? 0), 0);
   const formatDuration = (s: number) => {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
-    return h > 0 ? `${h}h ${m}m` : `${m} min`;
+    return h > 0 ? `${h} ч ${m} мин` : `${m} мин`;
   };
 
   return (
@@ -119,7 +119,7 @@ export function PlaylistDetailPage() {
 
         <Box>
           <Typography variant="caption" color="text.secondary" fontWeight={600}>
-            PLAYLIST
+            ПЛЕЙЛИСТ
           </Typography>
           <Typography variant="h3" fontWeight={700} mb={1}>
             {playlist.name}
@@ -131,7 +131,7 @@ export function PlaylistDetailPage() {
           )}
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <Chip
-              label={`${tracks.length} tracks`}
+              label={`${tracks.length} треков`}
               size="small"
               variant="outlined"
             />
@@ -143,7 +143,7 @@ export function PlaylistDetailPage() {
               />
             )}
             {playlist.isPublic && (
-              <Chip label="Public" size="small" color="primary" variant="outlined" />
+              <Chip label="Публичный" size="small" color="primary" variant="outlined" />
             )}
           </Box>
         </Box>
@@ -159,20 +159,20 @@ export function PlaylistDetailPage() {
           size="large"
           sx={{ borderRadius: 500 }}
         >
-          Play
+          Слушать
         </Button>
-        <Tooltip title="Shuffle play">
+        <Tooltip title="Перемешать">
           <IconButton onClick={handleShuffle} disabled={tracks.length === 0}>
             <ShuffleIcon />
           </IconButton>
         </Tooltip>
         <Box sx={{ flex: 1 }} />
-        <Tooltip title="Export as JSON">
+        <Tooltip title="Экспорт в JSON">
           <IconButton onClick={handleExport}>
             <FileDownloadIcon />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Import playlist JSON">
+        <Tooltip title="Импорт из JSON">
           <IconButton onClick={() => fileInputRef.current?.click()}>
             <FileUploadIcon />
           </IconButton>
@@ -184,7 +184,7 @@ export function PlaylistDetailPage() {
           style={{ display: 'none' }}
           onChange={handleImport}
         />
-        <Tooltip title="Delete playlist">
+        <Tooltip title="Удалить плейлист">
           <IconButton onClick={handleDelete} sx={{ color: 'error.main' }}>
             <DeleteIcon />
           </IconButton>
@@ -195,7 +195,7 @@ export function PlaylistDetailPage() {
       {tracks.length === 0 ? (
         <Box textAlign="center" py={8}>
           <Typography color="text.secondary">
-            This playlist is empty. Search for tracks and add them here.
+            Этот плейлист пуст. Найдите треки и добавьте их сюда.
           </Typography>
         </Box>
       ) : (
@@ -213,9 +213,9 @@ export function PlaylistDetailPage() {
           >
             <Typography variant="caption" color="text.secondary" textAlign="center">#</Typography>
             <Box />
-            <Typography variant="caption" color="text.secondary">Title</Typography>
-            <Typography variant="caption" color="text.secondary">Source</Typography>
-            <Typography variant="caption" color="text.secondary" textAlign="right">Duration</Typography>
+            <Typography variant="caption" color="text.secondary">Название</Typography>
+            <Typography variant="caption" color="text.secondary">Источник</Typography>
+            <Typography variant="caption" color="text.secondary" textAlign="right">Длительность</Typography>
             <Box />
           </Box>
 

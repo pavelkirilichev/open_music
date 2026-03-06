@@ -13,13 +13,26 @@ import { useIsLiked, useLikeTrack, useUnlikeTrack } from '../api/hooks/useLibrar
 import { useAuthStore } from '../store/auth.store';
 import { api } from '../api/client';
 import { Track } from '../types';
+import { formatAlbumName, formatArtistNames, parseArtistNames, sanitizeTrackTitle } from '../utils/trackText';
 
 const PROVIDER_LABELS: Record<string, string> = {
   youtube: 'YouTube',
-  archive: 'Internet Archive',
+  archive: 'Интернет-архив',
   jamendo: 'Jamendo',
   soundcloud: 'SoundCloud',
 };
+
+interface GeniusTrackPayload {
+  source: 'genius';
+  track: {
+    id: number;
+    title: string;
+    artist: string;
+    url: string;
+    artworkUrl: string | null;
+    lyrics: string | null;
+  } | null;
+}
 
 function formatDuration(s?: number) {
   if (!s) return '--:--';
@@ -34,6 +47,8 @@ export function TrackDetailPage() {
 
   const [track, setTrack] = useState<Track | null>(null);
   const [lyrics, setLyrics] = useState<string | null>(null);
+  const [lyricsSource, setLyricsSource] = useState<'genius' | 'lyricsovh' | null>(null);
+  const [geniusTrack, setGeniusTrack] = useState<GeniusTrackPayload['track']>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -45,6 +60,10 @@ export function TrackDetailPage() {
   const liked = likedData?.liked ?? false;
   const { mutate: likeTrack } = useLikeTrack();
   const { mutate: unlikeTrack } = useUnlikeTrack();
+  const displayTitle = track ? sanitizeTrackTitle(track.title, track.artist) : '';
+  const displayArtists = track ? formatArtistNames(track.artist) : '';
+  const primaryArtist = track ? parseArtistNames(track.artist)[0] ?? track.artist : '';
+  const displayAlbum = track ? formatAlbumName(track.album) : '';
 
   useEffect(() => {
     setLoading(true);
@@ -57,14 +76,56 @@ export function TrackDetailPage() {
 
   useEffect(() => {
     if (!track) return;
-    setLyricsLoading(true);
-    setLyrics(null);
-    fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(track.artist)}/${encodeURIComponent(track.title)}`)
-      .then((r) => r.json())
-      .then((d: { lyrics?: string }) => setLyrics(d.lyrics ?? null))
-      .catch(() => setLyrics(null))
-      .finally(() => setLyricsLoading(false));
-  }, [track?.artist, track?.title]);
+    let cancelled = false;
+
+    const loadLyrics = async () => {
+      setLyricsLoading(true);
+      setLyrics(null);
+      setLyricsSource(null);
+      setGeniusTrack(null);
+
+      try {
+        try {
+          const genius = await api.get<GeniusTrackPayload>('/tracks/genius', {
+            artist: primaryArtist || track.artist,
+            title: displayTitle || track.title,
+          });
+          if (cancelled) return;
+
+          setGeniusTrack(genius.track);
+          if (genius.track?.lyrics) {
+            setLyrics(genius.track.lyrics);
+            setLyricsSource('genius');
+            return;
+          }
+        } catch {
+          if (!cancelled) setGeniusTrack(null);
+        }
+
+        try {
+          const response = await fetch(
+            `https://api.lyrics.ovh/v1/${encodeURIComponent(primaryArtist || track.artist)}/${encodeURIComponent(displayTitle || track.title)}`,
+          );
+          const data = (await response.json()) as { lyrics?: string };
+          if (cancelled) return;
+          setLyrics(data.lyrics ?? null);
+          setLyricsSource(data.lyrics ? 'lyricsovh' : null);
+        } catch {
+          if (!cancelled) {
+            setLyrics(null);
+            setLyricsSource(null);
+          }
+        }
+      } finally {
+        if (!cancelled) setLyricsLoading(false);
+      }
+    };
+
+    void loadLyrics();
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.artist, track?.title, primaryArtist, displayTitle]);
 
   const handlePlay = () => {
     if (!track) return;
@@ -132,7 +193,7 @@ export function TrackDetailPage() {
           />
 
           <Typography variant="h4" fontWeight={800} sx={{ mb: 0.5, lineHeight: 1.2, wordBreak: 'break-word' }}>
-            {track.title}
+            {displayTitle}
           </Typography>
 
           <Typography
@@ -140,15 +201,15 @@ export function TrackDetailPage() {
             color="text.secondary"
             fontWeight={400}
             component={Link}
-            to={`/artist/${encodeURIComponent(track.artist)}`}
+            to={`/artist/${encodeURIComponent(primaryArtist)}`}
             sx={{ mb: 1, display: 'block', textDecoration: 'none', '&:hover': { color: 'text.primary', textDecoration: 'underline' } }}
           >
-            {track.artist}
+            {displayArtists}
           </Typography>
 
           {(track.album || track.year) && (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              {[track.album, track.year].filter(Boolean).join(' • ')}
+              {[displayAlbum, track.year].filter(Boolean).join(' • ')}
             </Typography>
           )}
 
@@ -179,7 +240,25 @@ export function TrackDetailPage() {
       </Box>
 
       <Box sx={{ mt: 4, maxWidth: 700 }}>
-        <Typography variant="h6" fontWeight={700} mb={2}>Текст песни</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
+          <Typography variant="h6" fontWeight={700}>Текст песни</Typography>
+          {lyricsSource === 'genius' && (
+            <Chip label="Genius" size="small" color="primary" />
+          )}
+          {geniusTrack?.url && (
+            <Button
+              component="a"
+              href={geniusTrack.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="small"
+              variant="text"
+              sx={{ minWidth: 'auto', px: 0.5 }}
+            >
+              Открыть на Genius
+            </Button>
+          )}
+        </Box>
         {lyricsLoading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <CircularProgress size={16} sx={{ color: 'text.secondary' }} />

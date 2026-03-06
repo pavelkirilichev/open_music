@@ -46,19 +46,19 @@ export function LoginPage() {
             Open Music
           </Typography>
           <Typography variant="h6" mt={1}>
-            Log in to continue
+            Войдите, чтобы продолжить
           </Typography>
         </Box>
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
-            Invalid email or password
+            Неверный email или пароль
           </Alert>
         )}
 
         <Box component="form" onSubmit={handleSubmit} display="flex" flexDirection="column" gap={2}>
           <TextField
-            label="Email"
+            label="Почта"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -67,7 +67,7 @@ export function LoginPage() {
             fullWidth
           />
           <TextField
-            label="Password"
+            label="Пароль"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -82,15 +82,15 @@ export function LoginPage() {
             size="large"
             disabled={isPending}
           >
-            {isPending ? 'Logging in...' : 'Log in'}
+            {isPending ? 'Вход...' : 'Войти'}
           </Button>
         </Box>
 
         <Box textAlign="center" mt={3}>
           <Typography variant="body2" color="text.secondary">
-            Don't have an account?{' '}
+            Нет аккаунта?{' '}
             <Link component={RouterLink} to="/register" color="primary">
-              Sign up
+              Зарегистрироваться
             </Link>
           </Typography>
         </Box>
