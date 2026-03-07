@@ -12,11 +12,15 @@ const pageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
 });
 
+const tracksQuerySchema = pageSchema.extend({
+  search: z.string().max(200).optional(),
+});
+
 // GET /api/library/tracks
-libraryRouter.get('/tracks', validate(pageSchema, 'query'), async (req, res, next) => {
+libraryRouter.get('/tracks', validate(tracksQuerySchema, 'query'), async (req, res, next) => {
   try {
-    const { page, limit } = req.query as z.infer<typeof pageSchema>;
-    const result = await libraryService.getLikedTracks(req.user!.sub, page, limit);
+    const { page, limit, search } = req.query as unknown as z.infer<typeof tracksQuerySchema>;
+    const result = await libraryService.getLikedTracks(req.user!.sub, page, limit, search);
     res.json(result);
   } catch (err) {
     next(err);
@@ -132,7 +136,7 @@ libraryRouter.delete('/artists/:artistId', async (req, res, next) => {
 // GET /api/library/history
 libraryRouter.get('/history', validate(pageSchema, 'query'), async (req, res, next) => {
   try {
-    const { limit } = req.query as z.infer<typeof pageSchema>;
+    const { limit } = req.query as unknown as z.infer<typeof pageSchema>;
     const history = await libraryService.getHistory(req.user!.sub, limit);
     res.json(history);
   } catch (err) {

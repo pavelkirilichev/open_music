@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
-  Pagination,
   IconButton,
   Tooltip,
+  CircularProgress,
   useMediaQuery,
   useTheme,
 } from '@mui/material';
@@ -13,7 +13,7 @@ import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import BookmarkAddedIcon from '@mui/icons-material/BookmarkAdded';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
-import { useSearch } from '../api/hooks/useSearch';
+import { useInfiniteSearch } from '../api/hooks/useSearch';
 import { useLikedIds, useAddLibraryAlbum, useLibraryAlbums, useLibraryArtists, useAddLibraryArtist } from '../api/hooks/useLibrary';
 import { useAlbumSearch, useArtistAlbums, AlbumItem } from '../api/hooks/useArtist';
 import { useAuthStore } from '../store/auth.store';
@@ -42,7 +42,6 @@ function mergeAlbums(
 
 export function SearchPage() {
   const [searchParams] = useSearchParams();
-  const [page, setPage] = useState(1);
   const navigate = useNavigate();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const theme = useTheme();
@@ -56,13 +55,25 @@ export function SearchPage() {
   // ── Albums: MusicBrainz text search (release-group title match) ──
   const { data: textAlbumsData, isLoading: textAlbumsLoading } = useAlbumSearch(q, 1, q.length > 0);
 
-  // ── Tracks: YouTube only ──
-  const { data: trackData, isLoading: tracksLoading, isFetching: tracksFetching } = useSearch(
-    { q, provider: 'youtube', type: 'track', page, limit: 20 },
+  // ── Tracks: YouTube only (infinite) ──
+  const {
+    data: trackPages,
+    isLoading: tracksLoading,
+    isFetching: tracksFetching,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteSearch(
+    { q, provider: 'youtube', type: 'track' },
     q.length > 0,
   );
 
-  const { data: likedSet } = useLikedIds(trackData?.tracks ?? []);
+  const allTracks = useMemo(
+    () => trackPages?.pages.flatMap((p) => p.tracks) ?? [],
+    [trackPages],
+  );
+
+  const { data: likedSet } = useLikedIds(allTracks);
   const { data: libraryAlbumsRaw } = useLibraryAlbums();
   const { mutate: addAlbum } = useAddLibraryAlbum();
   const { data: libraryArtistsRaw } = useLibraryArtists();
@@ -87,8 +98,6 @@ export function SearchPage() {
       ),
     [libraryArtistsRaw],
   );
-
-  useEffect(() => { setPage(1); }, [q]);
 
   // ── Merge artist albums + text search albums, dedup, filter ──
   const artistAlbums: Array<AlbumItem & { artist: string }> = useMemo(() => {
@@ -126,13 +135,12 @@ export function SearchPage() {
 
   // ── Filter tracks ──
   const tracks: Track[] = useMemo(() => {
-    if (!trackData?.tracks) return [];
-    return trackData.tracks.filter((t) => {
+    return allTracks.filter((t) => {
       if (t.duration && t.duration > 600) return false;
       if (t.duration && t.duration < 30) return false;
       return true;
     });
-  }, [trackData]);
+  }, [allTracks]);
   const sortedTracks: Track[] = useMemo(() => {
     if (!tracks.length || !likedSet) return tracks;
     const saved: Track[] = [];
@@ -145,12 +153,32 @@ export function SearchPage() {
     return [...saved, ...regular];
   }, [tracks, likedSet]);
 
-  const totalTrackPages = trackData ? Math.ceil(trackData.total / 20) : 0;
   const albumsLoading = artistAlbumsLoading || textAlbumsLoading;
   const foundArtist = artistAlbumsData?.artist;
   const displayFoundArtistName = foundArtist ? canonicalizeArtistName(foundArtist.name) : '';
   const isFoundArtistSaved =
     displayFoundArtistName.length > 0 && savedArtistNames.has(displayFoundArtistName.toLowerCase());
+
+  // Infinite scroll sentinel
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const handleObserver = useCallback(
+    (entries: IntersectionObserverEntry[]) => {
+      const [entry] = entries;
+      if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+        fetchNextPage();
+      }
+    },
+    [fetchNextPage, hasNextPage, isFetchingNextPage],
+  );
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(handleObserver, { rootMargin: '300px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleObserver]);
 
   return (
     <Box>
@@ -258,7 +286,7 @@ export function SearchPage() {
 
       {/* ── Tracks ── */}
       {q && (
-        tracksLoading || tracksFetching ? (
+        tracksLoading || (tracksFetching && allTracks.length === 0) ? (
           <LoadingSpinner message="Загрузка треков..." />
         ) : sortedTracks.length === 0 ? (
           !albumsLoading && sortedAlbums.length === 0 && (
@@ -295,25 +323,26 @@ export function SearchPage() {
               <TrackRow
                 key={`${track.provider}:${track.providerId}`}
                 track={track}
-                index={(page - 1) * 20 + i}
+                index={i}
                 showIndex
                 queue={sortedTracks}
                 likedSet={likedSet}
               />
             ))}
 
-            {totalTrackPages > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4, pb: 2 }}>
-                <Pagination
-                  count={totalTrackPages}
-                  page={page}
-                  onChange={(_, p) => {
-                    setPage(p);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  color="primary"
-                />
+            {/* Sentinel for infinite scroll */}
+            <div ref={sentinelRef} />
+
+            {isFetchingNextPage && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                <CircularProgress size={24} />
               </Box>
+            )}
+
+            {!hasNextPage && sortedTracks.length > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', py: 2 }}>
+                Все результаты загружены
+              </Typography>
             )}
           </Box>
         )

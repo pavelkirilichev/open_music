@@ -13,6 +13,7 @@ import { libraryRouter } from './api/library.router';
 import { playlistsRouter } from './api/playlists.router';
 import { streamRouter } from './api/stream.router';
 import { artistsRouter, clearMemCache } from './api/artists.router';
+import { importRouter } from './api/import.router';
 import { redis } from './services/redis.client';
 import { errorHandler, notFound } from './utils/errors';
 import { logger } from './utils/logger';
@@ -89,6 +90,7 @@ export function createApp() {
   app.use('/api/playlists', playlistsRouter);
   app.use('/api/stream', streamRouter);
   app.use('/api/artists', artistsRouter);
+  app.use('/api/import', importRouter);
 
   // ─── Error handling ────────────────────────────────────────────────────────
   app.use(notFound);

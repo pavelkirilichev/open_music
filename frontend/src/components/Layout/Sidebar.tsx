@@ -7,6 +7,7 @@ import LibraryMusicIcon from '@mui/icons-material/LibraryMusic';
 import LibraryMusicOutlinedIcon from '@mui/icons-material/LibraryMusicOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import QueueMusicIcon from '@mui/icons-material/QueueMusic';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import { useAuthStore } from '../../store/auth.store';
 import { usePlaylists, useCreatePlaylist } from '../../api/hooks/usePlaylists';
 
@@ -86,6 +87,28 @@ export function Sidebar() {
 
       {isLoggedIn && (
         <>
+          <List dense sx={{ px: 1.5, mb: 0.5 }}>
+            <ListItemButton
+              selected={location.pathname === '/import'}
+              onClick={() => navigate('/import')}
+              sx={{ borderRadius: 2, py: 1 }}
+            >
+              <ListItemIcon sx={{ minWidth: 36 }}>
+                <CloudDownloadIcon sx={{ color: location.pathname === '/import' ? '#FFDB4D' : 'text.secondary', fontSize: 22 }} />
+              </ListItemIcon>
+              <ListItemText
+                primary="Импорт музыки"
+                primaryTypographyProps={{
+                  fontWeight: location.pathname === '/import' ? 700 : 400,
+                  color: location.pathname === '/import' ? 'text.primary' : 'text.secondary',
+                  fontSize: 14,
+                }}
+              />
+            </ListItemButton>
+          </List>
+
+          <Divider sx={{ mx: 2, borderColor: 'rgba(255,255,255,0.06)' }} />
+
           <Box sx={{ px: 2, pt: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>
               Плейлисты

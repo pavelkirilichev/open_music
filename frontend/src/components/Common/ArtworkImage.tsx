@@ -44,6 +44,8 @@ export function ArtworkImage({
       component="img"
       src={src}
       alt={alt}
+      loading="lazy"
+      decoding="async"
       onError={() => setError(true)}
       sx={{
         width: size,

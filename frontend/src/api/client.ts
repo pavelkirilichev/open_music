@@ -85,8 +85,8 @@ export const api = {
   get: <T>(url: string, params?: Record<string, unknown>) =>
     apiClient.get<T>(url, { params }).then((r) => r.data),
 
-  post: <T>(url: string, data?: unknown) =>
-    apiClient.post<T>(url, data).then((r) => r.data),
+  post: <T>(url: string, data?: unknown, config?: { timeout?: number }) =>
+    apiClient.post<T>(url, data, config).then((r) => r.data),
 
   put: <T>(url: string, data?: unknown) =>
     apiClient.put<T>(url, data).then((r) => r.data),

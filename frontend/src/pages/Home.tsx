@@ -7,7 +7,7 @@ export function Home() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const { data: liked } = useLikedTracks();
 
-  const likedTracks = liked?.tracks?.slice(0, 5) ?? [];
+  const likedTracks = (liked?.tracks ?? []).slice(0, 5);
 
   // One batch call for all tracks on this page
   const allPageTracks = [...likedTracks];

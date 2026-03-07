@@ -14,6 +14,7 @@ const RegisterPage = lazy(() => import('./pages/Register').then(m => ({ default:
 const ArtistPage = lazy(() => import('./pages/ArtistPage').then(m => ({ default: m.ArtistPage })));
 const TrackDetailPage = lazy(() => import('./pages/TrackDetailPage').then(m => ({ default: m.TrackDetailPage })));
 const AlbumPage = lazy(() => import('./pages/AlbumPage').then(m => ({ default: m.AlbumPage })));
+const ImportPage = lazy(() => import('./pages/ImportPage').then(m => ({ default: m.ImportPage })));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
@@ -58,6 +59,14 @@ export default function App() {
           <Route path="/artist/:name" element={<ArtistPage />} />
           <Route path="/album/:mbid" element={<AlbumPage />} />
           <Route path="/track/:provider/:id" element={<TrackDetailPage />} />
+          <Route
+            path="/import"
+            element={
+              <ProtectedRoute>
+                <ImportPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

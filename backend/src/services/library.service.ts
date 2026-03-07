@@ -2,17 +2,29 @@ import { prisma } from '../prisma/client';
 import { upsertTrack, getTrackMeta } from './search.service';
 import { AppError } from '../utils/errors';
 
-export async function getLikedTracks(userId: string, page = 1, limit = 50) {
+export async function getLikedTracks(userId: string, page = 1, limit = 50, search?: string) {
   const skip = (page - 1) * limit;
+  const where: any = { userId };
+
+  if (search && search.trim()) {
+    const q = search.trim();
+    where.track = {
+      OR: [
+        { title: { contains: q, mode: 'insensitive' } },
+        { artist: { contains: q, mode: 'insensitive' } },
+      ],
+    };
+  }
+
   const [items, total] = await Promise.all([
     prisma.libraryTrack.findMany({
-      where: { userId },
+      where,
       include: { track: true },
       orderBy: { likedAt: 'desc' },
       skip,
       take: limit,
     }),
-    prisma.libraryTrack.count({ where: { userId } }),
+    prisma.libraryTrack.count({ where }),
   ]);
   return { tracks: items.map((i) => i.track), total, page, limit };
 }

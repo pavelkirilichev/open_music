@@ -10,11 +10,42 @@ interface LibraryTracksResponse {
   limit: number;
 }
 
-export function useLikedTracks(page = 1, limit = 50) {
+interface LikedTracksData {
+  tracks: Track[];
+  total: number;
+}
+
+const LIKED_PAGE_SIZE = 100;
+
+export function useLikedTracks() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
-  return useQuery<LibraryTracksResponse>({
-    queryKey: ['library', 'tracks', page, limit],
-    queryFn: () => api.get<LibraryTracksResponse>('/library/tracks', { page, limit }),
+  return useQuery<LikedTracksData>({
+    queryKey: ['library', 'tracks'],
+    queryFn: async () => {
+      const firstPage = await api.get<LibraryTracksResponse>('/library/tracks', {
+        page: 1,
+        limit: LIKED_PAGE_SIZE,
+      });
+
+      const totalPages = Math.max(1, Math.ceil(firstPage.total / firstPage.limit));
+      if (totalPages === 1) {
+        return { tracks: firstPage.tracks, total: firstPage.total };
+      }
+
+      const restPages = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, idx) =>
+          api.get<LibraryTracksResponse>('/library/tracks', {
+            page: idx + 2,
+            limit: LIKED_PAGE_SIZE,
+          }),
+        ),
+      );
+
+      return {
+        tracks: [firstPage, ...restPages].flatMap((page) => page.tracks),
+        total: firstPage.total,
+      };
+    },
     enabled: isLoggedIn,
   });
 }
