@@ -23,9 +23,12 @@ const addTrackSchema = z.object({
 // GET /api/playlists
 playlistsRouter.get('/', async (req, res, next) => {
   try {
+    const withTracks = req.query.withTracks === 'true';
     const playlists = await prisma.playlist.findMany({
       where: { userId: req.user!.sub },
-      include: { _count: { select: { tracks: true } } },
+      include: withTracks
+        ? { tracks: { include: { track: true }, orderBy: { position: 'asc' } } }
+        : { _count: { select: { tracks: true } } },
       orderBy: { updatedAt: 'desc' },
     });
     res.json(playlists);

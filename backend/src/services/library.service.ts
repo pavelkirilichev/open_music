@@ -29,8 +29,25 @@ export async function getLikedTracks(userId: string, page = 1, limit = 50, searc
   return { tracks: items.map((i) => i.track), total, page, limit };
 }
 
-export async function likeTrack(userId: string, provider: string, providerId: string) {
-  const meta = await getTrackMeta(provider, providerId);
+interface TrackMetaHint {
+  title?: string;
+  artist?: string;
+  album?: string;
+  artworkUrl?: string;
+  duration?: number;
+}
+
+export async function likeTrack(userId: string, provider: string, providerId: string, hint?: TrackMetaHint) {
+  let meta = await getTrackMeta(provider, providerId);
+  // Overlay hint fields — prefer frontend-provided metadata (has MusicBrainz album/artist)
+  // over raw YouTube tags which often lack album info
+  if (hint) {
+    if (hint.title) meta = { ...meta, title: hint.title };
+    if (hint.artist) meta = { ...meta, artist: hint.artist };
+    if (hint.album) meta = { ...meta, album: hint.album };
+    if (hint.artworkUrl) meta = { ...meta, artworkUrl: hint.artworkUrl };
+    if (hint.duration) meta = { ...meta, duration: hint.duration };
+  }
   const trackId = await upsertTrack(meta);
   try {
     await prisma.libraryTrack.create({ data: { userId, trackId } });

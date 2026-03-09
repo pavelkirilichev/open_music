@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.middleware';
 import { logger } from '../utils/logger';
-import { searchAll } from '../services/providers/registry';
+import { searchAll, getProvider } from '../services/providers/registry';
 import { TrackMeta } from '../types';
 
 export const artistsRouter = Router();
@@ -285,12 +285,18 @@ artistsRouter.get('/albums/:mbid', async (req, res, next) => {
       } catch { /* ignore fallback error */ }
     }
 
+    // Artwork: try release-group level first (broader), then release level
+    const artworkUrlRg = `${CAA_BASE}/${mbid}/front-500`;
+    const artworkUrlRelease = `https://coverartarchive.org/release/${release.id}/front-500`;
+
     const result = {
       mbid,
       title: release.title,
       artist: artistName ?? 'Unknown Artist',
       year: Number.isNaN(year) ? null : year,
       tracks,
+      artworkUrl: artworkUrlRg,
+      artworkUrlRelease,
     };
 
     // Cache for 24 hours
@@ -458,8 +464,12 @@ function titleSimilar(a: string, b: string): boolean {
   const clean = (s: string) =>
     s
       .toLowerCase()
+      // Remove feat/ft blocks in brackets
       .replace(/[\(\[\{]\s*(?:feat\.?|ft\.?|featuring)[^\)\]\}]*[\)\]\}]/gi, ' ')
       .replace(/\s*(?:feat\.?|ft\.?|featuring)\s+.*$/gi, ' ')
+      // Remove common suffixes like "(Official Video)", "- Official", "Remastered"
+      .replace(/[\(\[\{][^\)\]\}]{0,40}(?:official|video|audio|remaster|hd|hq|lyric|визуализ)[^\)\]\}]*[\)\]\}]/gi, ' ')
+      .replace(/\s*[-–—]\s*(?:official|video|audio|remastered|hd|hq|lyric)\b.*/gi, ' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
 
@@ -468,13 +478,17 @@ function titleSimilar(a: string, b: string): boolean {
   if (!na || !nb) return false;
   if (na === nb) return true;
   const [longer, shorter] = na.length >= nb.length ? [na, nb] : [nb, na];
+  // prefix match: shorter must be at least 4 chars to avoid false positives
   if (longer.startsWith(shorter) && shorter.length >= 4) return true;
-  if (shorter.length < longer.length * 0.6) return false;
-  return longer.includes(shorter);
+  // ratio guard: shorter must be at least 65% of longer
+  if (shorter.length < longer.length * 0.65) return false;
+  // substring in either direction
+  if (longer.includes(shorter) || shorter.includes(longer)) return true;
+  return false;
 }
 
 const NON_TRACK_RE =
-  /(?:reaction|реакц|обзор|review|тизер|teaser|snippet|snipp?et|preview|превью|live|концерт|cover|кавер|karaoke|караоке|shorts|подкаст|интервью|interview|разбор|analysis|amv|clip|клип|behind\s+the\s+scenes|making\s+of)/i;
+  /(?:reaction|реакц|обзор|review|тизер|teaser|snippet|snipp?et|preview|превью|live\b|live\s+at|концерт|cover\s+by|кавер|karaoke|караоке|shorts|подкаст|интервью|interview|разбор|analysis|amv|behind\s+the\s+scenes|making\s+of|acoustic|акустик|instrumental|инструментал|freestyle|фристайл|remix\s+by|unofficial)/i;
 
 const providerTracksSchema = z.object({
   name: z.string().min(1).max(200),
@@ -490,77 +504,62 @@ artistsRouter.get(
   async (req, res, next) => {
     try {
       const { name, albumMbid } = req.query as z.infer<typeof providerTracksSchema>;
-      const cacheKey = `artist:provider-tracks:v3:${Buffer.from(name).toString('base64')}:${albumMbid ?? 'all'}`;
+      const cacheKey = `artist:provider-tracks:v6:${Buffer.from(name).toString('base64')}:${albumMbid ?? 'all'}`;
 
       const cached = cacheGet<{ tracks: TrackMeta[] }>(cacheKey);
       if (cached) return res.json(cached);
 
-      // Step 1: Find artist on MusicBrainz
-      const artistRes = await fetch(
-        `${MB_BASE}/artist/?query=${encodeURIComponent(name)}&fmt=json`,
-        { headers: { 'User-Agent': MB_UA } },
-      );
-      if (!artistRes.ok) {
-        return res.json({ tracks: [] });
-      }
-      const artistData = (await artistRes.json()) as MBArtistSearchResponse;
-      const artist = artistData.artists?.[0];
-      if (!artist) return res.json({ tracks: [] });
+      let artistName: string;
+      let albumsToFetch: MBReleaseGroup[];
 
-      const artistName = artist.name;
-
-      // Step 2: Get release groups (albums + singles + EPs)
-      await delay(1100);
-      const rgRes = await fetch(
-        `${MB_BASE}/release-group?artist=${encodeURIComponent(artist.id)}&type=album|single|ep&fmt=json&limit=50`,
-        { headers: { 'User-Agent': MB_UA } },
-      );
-      if (!rgRes.ok) return res.json({ tracks: [] });
-      const rgData = (await rgRes.json()) as MBReleaseGroupResponse;
-      const releaseGroups = rgData['release-groups'] ?? [];
-
-      // Step 3: Decide which albums to fetch.
-      // By default: first 15 albums to keep response time reasonable.
-      // If albumMbid is provided: focus only that album for better match quality.
-      let albumsToFetch: MBReleaseGroup[] = [];
       if (albumMbid) {
-        const exact = releaseGroups.find((rg) => rg.id === albumMbid);
-        if (exact) {
-          albumsToFetch = [exact];
-        } else {
-          await delay(1100);
-          try {
-            const rgByIdRes = await fetch(
-              `${MB_BASE}/release-group/${encodeURIComponent(albumMbid)}?fmt=json`,
-              { headers: { 'User-Agent': MB_UA } },
-            );
-            if (rgByIdRes.ok) {
-              const rgById = (await rgByIdRes.json()) as {
-                id: string;
-                title: string;
-                'primary-type'?: string;
-                'secondary-types'?: string[];
-                'first-release-date'?: string;
-              };
-              albumsToFetch = [
-                {
-                  id: rgById.id,
-                  title: rgById.title,
-                  'primary-type': rgById['primary-type'],
-                  'secondary-types': rgById['secondary-types'],
-                  'first-release-date': rgById['first-release-date'],
-                },
-              ];
-            }
-          } catch (err) {
-            logger.warn(`Failed to fetch release-group by id ${albumMbid}`, { err });
-          }
-        }
+        // Fast path: skip artist search + release groups list entirely.
+        // Fetch the release group directly (includes artist name via artist-credits).
+        const rgRes = await fetch(
+          `${MB_BASE}/release-group/${encodeURIComponent(albumMbid)}?inc=artist-credits&fmt=json`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!rgRes.ok) return res.json({ tracks: [] });
+        const rgData = (await rgRes.json()) as {
+          id: string;
+          title: string;
+          'primary-type'?: string;
+          'secondary-types'?: string[];
+          'first-release-date'?: string;
+          'artist-credit'?: Array<{ name?: string; artist: { name: string } }>;
+        };
+        artistName = rgData['artist-credit']?.[0]?.artist?.name ?? name;
+        albumsToFetch = [{
+          id: rgData.id,
+          title: rgData.title,
+          'primary-type': rgData['primary-type'],
+          'secondary-types': rgData['secondary-types'],
+          'first-release-date': rgData['first-release-date'],
+        }];
       } else {
-        albumsToFetch = releaseGroups.slice(0, 15);
+        // Normal path: search artist + get release groups
+        const artistRes = await fetch(
+          `${MB_BASE}/artist/?query=${encodeURIComponent(name)}&fmt=json`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!artistRes.ok) return res.json({ tracks: [] });
+        const artistSearchData = (await artistRes.json()) as MBArtistSearchResponse;
+        const artist = artistSearchData.artists?.[0];
+        if (!artist) return res.json({ tracks: [] });
+        artistName = artist.name;
+
+        await delay(1100);
+        const rgListRes = await fetch(
+          `${MB_BASE}/release-group?artist=${encodeURIComponent(artist.id)}&type=album|single|ep&fmt=json&limit=50`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!rgListRes.ok) return res.json({ tracks: [] });
+        const rgListData = (await rgListRes.json()) as MBReleaseGroupResponse;
+        albumsToFetch = (rgListData['release-groups'] ?? []).slice(0, 15);
       }
 
       if (albumsToFetch.length === 0) return res.json({ tracks: [] });
+
       interface MBAlbumTrack {
         title: string;
         duration: number | null; // seconds
@@ -568,37 +567,54 @@ artistsRouter.get(
         albumMbid: string;
         position: number;
       }
+
+      // Parallel tracklist fetch: process 3 albums at a time
+      const TRACKLIST_CONCURRENCY = 3;
       const mbTracks: MBAlbumTrack[] = [];
       const seenTitles = new Set<string>();
 
-      for (const rg of albumsToFetch) {
-        await delay(1100);
-        try {
-          const relRes = await fetch(
-            `${MB_BASE}/release?release-group=${encodeURIComponent(rg.id)}&inc=recordings&fmt=json&limit=1`,
-            { headers: { 'User-Agent': MB_UA } },
-          );
-          if (!relRes.ok) continue;
-          const relData = (await relRes.json()) as MBReleaseResponse;
-          const release = relData.releases?.[0];
-          if (!release?.media) continue;
+      for (let i = 0; i < albumsToFetch.length; i += TRACKLIST_CONCURRENCY) {
+        const batch = albumsToFetch.slice(i, i + TRACKLIST_CONCURRENCY);
+        const batchResults = await Promise.allSettled(
+          batch.map(async (rg) => {
+            const relRes = await fetch(
+              `${MB_BASE}/release?release-group=${encodeURIComponent(rg.id)}&inc=recordings&fmt=json&limit=1`,
+              { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+            );
+            if (!relRes.ok) return [];
+            const relData = (await relRes.json()) as MBReleaseResponse;
+            const release = relData.releases?.[0];
+            if (!release?.media) return [];
+            const tracks: MBAlbumTrack[] = [];
+            for (const medium of release.media) {
+              for (const track of medium.tracks ?? []) {
+                tracks.push({
+                  title: track.title,
+                  duration: track.length != null ? Math.round(track.length / 1000) : null,
+                  album: rg.title,
+                  albumMbid: rg.id,
+                  position: track.position,
+                });
+              }
+            }
+            return tracks;
+          }),
+        );
 
-          for (const medium of release.media) {
-            for (const track of medium.tracks ?? []) {
-              const normTitle = normStr(track.title);
-              if (seenTitles.has(normTitle)) continue; // dedup across albums
+        for (const result of batchResults) {
+          if (result.status !== 'fulfilled') continue;
+          for (const t of result.value) {
+            const normTitle = normStr(t.title);
+            if (!seenTitles.has(normTitle)) {
               seenTitles.add(normTitle);
-              mbTracks.push({
-                title: track.title,
-                duration: track.length != null ? Math.round(track.length / 1000) : null,
-                album: rg.title,
-                albumMbid: rg.id,
-                position: track.position,
-              });
+              mbTracks.push(t);
             }
           }
-        } catch (err) {
-          logger.warn(`Failed to fetch tracklist for ${rg.id}`, { err });
+        }
+
+        // Delay between batches only (not after last batch, not for single-album albumMbid path)
+        if (i + TRACKLIST_CONCURRENCY < albumsToFetch.length) {
+          await delay(1200);
         }
       }
 
@@ -663,7 +679,7 @@ artistsRouter.get(
           aa.includes(ya) ||
           titleSimilar(ya, aa);
         if (!sameArtist) return false;
-        if (mbt.duration && yt.duration && Math.abs(mbt.duration - yt.duration) > 90) {
+        if (mbt.duration && yt.duration && Math.abs(mbt.duration - yt.duration) > 60) {
           return false;
         }
         const minDuration = albumMbid ? 8 : 15;
@@ -694,7 +710,7 @@ artistsRouter.get(
           album: mbt.album,
           albumMbid: mbt.albumMbid,
           duration: mbt.duration ?? bestMatch.duration,
-          artworkUrl: bestMatch.artworkUrl,
+          artworkUrl: `${CAA_BASE}/${mbt.albumMbid}/front-250`, // official CAA artwork, not YouTube thumbnail
           year: undefined,
           score: bestMatch.score,
         });
@@ -703,66 +719,74 @@ artistsRouter.get(
       if (albumMbid) {
         const unmatched = mbTracks.filter((mbt) => !matchedMb.has(mbKey(mbt)));
         if (unmatched.length > 0) {
-          for (const mbt of unmatched) {
-            let pool: TrackMeta[] = [];
+          // Parallel fallback searches in batches of 4 to avoid YT rate limits
+          const BATCH = 4;
+          for (let i = 0; i < unmatched.length; i += BATCH) {
+            const batch = unmatched.slice(i, i + BATCH);
+            const batchResults = await Promise.allSettled(
+              batch.map(async (mbt) => {
+                let pool: TrackMeta[] = [];
+                try {
+                  const strict = await searchAll({
+                    query: `${artistName} ${mbt.album} ${mbt.title}`,
+                    type: 'track',
+                    limit: 40,
+                  });
+                  pool = strict.tracks;
+                } catch { /* ignore */ }
 
-            try {
-              const strict = await searchAll({
-                query: `${artistName} ${mbt.album} ${mbt.title}`,
-                type: 'track',
-                limit: 50,
-              });
-              pool = strict.tracks;
-            } catch {
-              // ignore and try broader query below
-            }
-
-            let candidate = pool.find((yt) => {
-              const ytKey = `${yt.provider}:${yt.providerId}`;
-              if (usedYt.has(ytKey)) return false;
-              return canMatch(mbt, yt);
-            });
-
-            if (!candidate) {
-              try {
-                const broad = await searchAll({
-                  query: `${artistName} ${mbt.title}`,
-                  type: 'track',
-                  limit: 50,
-                });
-                candidate = broad.tracks.find((yt) => {
+                let candidate = pool.find((yt) => {
                   const ytKey = `${yt.provider}:${yt.providerId}`;
                   if (usedYt.has(ytKey)) return false;
                   return canMatch(mbt, yt);
                 });
-              } catch {
-                // no-op
-              }
+
+                if (!candidate) {
+                  try {
+                    const broad = await searchAll({
+                      query: `${artistName} ${mbt.title}`,
+                      type: 'track',
+                      limit: 40,
+                    });
+                    candidate = broad.tracks.find((yt) => {
+                      const ytKey = `${yt.provider}:${yt.providerId}`;
+                      if (usedYt.has(ytKey)) return false;
+                      return canMatch(mbt, yt);
+                    });
+                  } catch { /* no-op */ }
+                }
+
+                return { mbt, candidate };
+              }),
+            );
+
+            for (const r of batchResults) {
+              if (r.status !== 'fulfilled' || !r.value.candidate) continue;
+              const { mbt, candidate } = r.value;
+              const ytKey = `${candidate.provider}:${candidate.providerId}`;
+              if (usedYt.has(ytKey)) continue; // claimed by parallel sibling
+              usedYt.add(ytKey);
+              matchedMb.add(mbKey(mbt));
+              matchedTracks.push({
+                id: candidate.id,
+                provider: candidate.provider,
+                providerId: candidate.providerId,
+                title: mbt.title,
+                artist: artistName,
+                album: mbt.album,
+                albumMbid: mbt.albumMbid,
+                duration: mbt.duration ?? candidate.duration,
+                artworkUrl: `${CAA_BASE}/${mbt.albumMbid}/front-250`, // official CAA artwork
+                year: undefined,
+                score: candidate.score,
+              });
             }
-
-            if (!candidate) continue;
-
-            usedYt.add(`${candidate.provider}:${candidate.providerId}`);
-            matchedMb.add(mbKey(mbt));
-            matchedTracks.push({
-              id: candidate.id,
-              provider: candidate.provider,
-              providerId: candidate.providerId,
-              title: mbt.title,
-              artist: artistName,
-              album: mbt.album,
-              albumMbid: mbt.albumMbid,
-              duration: mbt.duration ?? candidate.duration,
-              artworkUrl: candidate.artworkUrl,
-              year: undefined,
-              score: candidate.score,
-            });
           }
         }
       }
 
       const result = { tracks: matchedTracks };
-      cacheSet(cacheKey, result, 3600);
+      cacheSet(cacheKey, result, 14400); // 4 hours
       return res.json(result);
     } catch (err) {
       logger.error('artists/provider-tracks route error', { err });
@@ -770,3 +794,298 @@ artistsRouter.get(
     }
   },
 );
+
+// ─── Artist image from Deezer → Last.fm fallback ─────────────────────────────
+const artistImageSchema = z.object({ name: z.string().min(1).max(200) });
+
+artistsRouter.get(
+  '/image',
+  validate(artistImageSchema, 'query'),
+  async (req, res, next) => {
+    try {
+      const { name } = req.query as z.infer<typeof artistImageSchema>;
+      const cacheKey = `artist:image:v2:${Buffer.from(name).toString('base64')}`;
+
+      const cached = cacheGet<{ imageUrl: string | null }>(cacheKey);
+      if (cached !== null) return res.json(cached);
+
+      let imageUrl: string | null = null;
+
+      // Primary: Deezer API — official artist photos, free, no key required
+      try {
+        const deezerRes = await fetch(
+          `https://api.deezer.com/search/artist?q=${encodeURIComponent(name)}&limit=5`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(5000) },
+        );
+        if (deezerRes.ok) {
+          const deezerData = (await deezerRes.json()) as {
+            data?: Array<{ name: string; picture_xl?: string; picture_big?: string; picture_medium?: string }>;
+          };
+          const artists = deezerData.data ?? [];
+          // Find exact name match first, fallback to first result
+          const normName = name.toLowerCase().replace(/\s+/g, ' ').trim();
+          const match =
+            artists.find((a) => a.name.toLowerCase().replace(/\s+/g, ' ').trim() === normName) ??
+            artists[0];
+          if (match) {
+            // picture_xl is highest quality (1000x1000), picture_big is 500x500
+            const pic = match.picture_xl ?? match.picture_big ?? match.picture_medium ?? null;
+            // Deezer returns placeholder for artists without photos — skip those
+            // Placeholder URL contains "/images/artist//" (empty hash) or ends with "-000000-80-0-0"
+            if (pic && !pic.includes('//images/artist//') && !pic.endsWith('default_avatar.png')) {
+              imageUrl = pic;
+            }
+          }
+        }
+      } catch { /* ignore */ }
+
+      // Fallback: Last.fm API (no key needed for image endpoint)
+      if (!imageUrl) {
+        try {
+          const lfmRes = await fetch(
+            `https://www.last.fm/music/${encodeURIComponent(name)}/+images`,
+            { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(5000) },
+          );
+          if (lfmRes.ok) {
+            const html = await lfmRes.text();
+            // Extract first image URL from Last.fm gallery
+            const imgMatch = html.match(/class="image-list-item-wrapper"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"/);
+            if (imgMatch?.[1]) {
+              imageUrl = imgMatch[1].replace('/avatar170s/', '/avatar300s/');
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      const result = { imageUrl };
+      cacheSet(cacheKey, result, 86400); // 24h
+      return res.json(result);
+    } catch (err) {
+      logger.error('artists/image route error', { err });
+      next(err);
+    }
+  },
+);
+
+// ─── GET /api/artists/mb-tracks?name=&albumMbid= ─────────────────────────────
+// Fast endpoint: returns MusicBrainz tracklist WITHOUT any YouTube search.
+// Tracks have provider: 'musicbrainz', providerId: recordingMbid.
+
+artistsRouter.get(
+  '/mb-tracks',
+  validate(providerTracksSchema, 'query'),
+  async (req, res, next) => {
+    try {
+      const { name, albumMbid } = req.query as z.infer<typeof providerTracksSchema>;
+      const cacheKey = `artist:mb-tracks:v1:${Buffer.from(name).toString('base64')}:${albumMbid ?? 'all'}`;
+
+      const cached = cacheGet<object>(cacheKey);
+      if (cached) return res.json(cached);
+
+      let artistName: string;
+      let albumsToFetch: MBReleaseGroup[];
+
+      if (albumMbid) {
+        // Fast path: fetch the release group directly
+        const rgRes = await fetch(
+          `${MB_BASE}/release-group/${encodeURIComponent(albumMbid)}?inc=artist-credits&fmt=json`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!rgRes.ok) return res.json({ tracks: [] });
+        const rgData = (await rgRes.json()) as {
+          id: string;
+          title: string;
+          'primary-type'?: string;
+          'secondary-types'?: string[];
+          'first-release-date'?: string;
+          'artist-credit'?: Array<{ name?: string; artist: { name: string } }>;
+        };
+        artistName = rgData['artist-credit']?.[0]?.artist?.name ?? name;
+        albumsToFetch = [{
+          id: rgData.id,
+          title: rgData.title,
+          'primary-type': rgData['primary-type'],
+          'secondary-types': rgData['secondary-types'],
+          'first-release-date': rgData['first-release-date'],
+        }];
+      } else {
+        // Normal path: search artist + get release groups
+        const artistRes = await fetch(
+          `${MB_BASE}/artist/?query=${encodeURIComponent(name)}&fmt=json`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!artistRes.ok) return res.json({ tracks: [] });
+        const artistSearchData = (await artistRes.json()) as MBArtistSearchResponse;
+        const artist = artistSearchData.artists?.[0];
+        if (!artist) return res.json({ tracks: [] });
+        artistName = artist.name;
+
+        await delay(1100);
+        const rgListRes = await fetch(
+          `${MB_BASE}/release-group?artist=${encodeURIComponent(artist.id)}&type=album|single|ep&fmt=json&limit=50`,
+          { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!rgListRes.ok) return res.json({ tracks: [] });
+        const rgListData = (await rgListRes.json()) as MBReleaseGroupResponse;
+        albumsToFetch = (rgListData['release-groups'] ?? []).slice(0, 15);
+      }
+
+      if (albumsToFetch.length === 0) return res.json({ tracks: [] });
+
+      // Parallel tracklist fetch: process 3 albums at a time
+      const TRACKLIST_CONCURRENCY = 3;
+      const mbTracks: Array<{
+        id: string;
+        provider: string;
+        providerId: string;
+        title: string;
+        artist: string;
+        album: string;
+        albumMbid: string;
+        duration: number | null;
+        artworkUrl: string;
+      }> = [];
+      const seenMbids = new Set<string>();
+
+      for (let i = 0; i < albumsToFetch.length; i += TRACKLIST_CONCURRENCY) {
+        const batch = albumsToFetch.slice(i, i + TRACKLIST_CONCURRENCY);
+        const batchResults = await Promise.allSettled(
+          batch.map(async (rg) => {
+            const relRes = await fetch(
+              `${MB_BASE}/release?release-group=${encodeURIComponent(rg.id)}&inc=recordings&fmt=json&limit=1`,
+              { headers: { 'User-Agent': MB_UA }, signal: AbortSignal.timeout(8000) },
+            );
+            if (!relRes.ok) return [];
+            const relData = (await relRes.json()) as MBReleaseResponse;
+            const release = relData.releases?.[0];
+            if (!release?.media) return [];
+
+            const tracks: typeof mbTracks = [];
+            for (const medium of release.media) {
+              for (const track of medium.tracks ?? []) {
+                const recordingMbid = track.recording?.id ?? track.id;
+                tracks.push({
+                  id: `musicbrainz:${recordingMbid}`,
+                  provider: 'musicbrainz',
+                  providerId: recordingMbid,
+                  title: track.title,
+                  artist: artistName,
+                  album: rg.title,
+                  albumMbid: rg.id,
+                  duration: track.length != null ? Math.round(track.length / 1000) : null,
+                  artworkUrl: `${CAA_BASE}/${rg.id}/front-250`,
+                });
+              }
+            }
+            return tracks;
+          }),
+        );
+
+        for (const result of batchResults) {
+          if (result.status !== 'fulfilled') continue;
+          for (const t of result.value) {
+            if (!seenMbids.has(t.providerId)) {
+              seenMbids.add(t.providerId);
+              mbTracks.push(t);
+            }
+          }
+        }
+
+        // Delay between batches only (not after last batch, not for single-album albumMbid path)
+        if (!albumMbid && i + TRACKLIST_CONCURRENCY < albumsToFetch.length) {
+          await delay(1200);
+        }
+      }
+
+      const result = { tracks: mbTracks };
+      cacheSet(cacheKey, result, 14400); // 4 hours
+      return res.json(result);
+    } catch (err) {
+      logger.error('artists/mb-tracks route error', { err });
+      next(err);
+    }
+  },
+);
+
+// ─── GET /api/artists/find-track?artist=&title=&album=&duration= ──────────────
+// On-demand YouTube search for a SINGLE track. Called when user clicks play.
+
+const findTrackSchema = z.object({
+  artist: z.string().min(1).max(200),
+  title: z.string().min(1).max(200),
+  album: z.string().max(200).optional(),
+  duration: z.coerce.number().int().min(1).max(3600).optional(),
+});
+
+artistsRouter.get(
+  '/find-track',
+  validate(findTrackSchema, 'query'),
+  async (req, res, next) => {
+    try {
+      const { artist, title, album, duration } = req.query as unknown as z.infer<typeof findTrackSchema>;
+      const cacheKey = `artist:find-track:v1:${Buffer.from(`${artist}:${title}`).toString('base64')}`;
+
+      const cached = cacheGet<object | null>(cacheKey);
+      if (cached !== null) return res.json(cached);
+
+      // Try multiple search queries in order, stop at first match
+      const queries = [
+        `${artist} ${title}`,
+        ...(album ? [`${artist} ${album} ${title}`] : []),
+        `${artist} ${title} official`,
+      ];
+
+      for (const query of queries) {
+        let results;
+        try {
+          results = await searchAll({ query, type: 'track', limit: 20 });
+        } catch {
+          continue;
+        }
+
+        const match = results.tracks.find((yt) => {
+          const text = `${yt.title} ${yt.artist ?? ''}`;
+          if (NON_TRACK_RE.test(text)) return false;
+          if (!titleSimilar(title, yt.title)) return false;
+          if (duration !== undefined && yt.duration !== undefined) {
+            if (Math.abs(duration - yt.duration) > 60) return false;
+          }
+          if (yt.duration !== undefined && (yt.duration < 10 || yt.duration > 1200)) return false;
+          return true;
+        });
+
+        if (match) {
+          const result = {
+            provider: match.provider,
+            providerId: match.providerId,
+            artworkUrl: match.artworkUrl,
+          };
+          cacheSet(cacheKey, result, 3600); // 1 hour
+          return res.json(result);
+        }
+      }
+
+      // Not found
+      cacheSet(cacheKey, null, 3600);
+      return res.json(null);
+    } catch (err) {
+      logger.error('artists/find-track route error', { err });
+      return next(err);
+    }
+  },
+);
+
+// ─── POST /api/artists/warm-tracks ────────────────────────────────────────────
+// Pre-warms stream URL cache for a list of tracks (fire-and-forget).
+// Responds immediately; warming happens in the background.
+artistsRouter.post('/warm-tracks', (req, res) => {
+  const tracks = (req.body?.tracks ?? []) as Array<{ provider: string; providerId: string }>;
+  // Respond immediately so the client isn't blocked
+  res.json({ ok: true });
+  // Warm in background: don't await
+  for (const t of tracks.slice(0, 4)) {
+    try {
+      getProvider(t.provider).getStreamUrl(t.providerId).catch(() => {});
+    } catch { /* ignore unknown provider */ }
+  }
+});

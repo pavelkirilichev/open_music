@@ -16,7 +16,9 @@ import { useRecordHistory, useIsLiked, useLikeTrack, useUnlikeTrack } from '../.
 import { useAuthStore } from '../../store/auth.store';
 import { Track } from '../../types';
 import { api } from '../../api/client';
+import { resolveTrackForPlayback } from '../../utils/resolveTrack';
 import { formatArtistNames, parseArtistNames, sanitizeTrackTitle } from '../../utils/trackText';
+import { AddToPlaylistButton } from '../Track/AddToPlaylistButton';
 
 interface AlbumSearchItem {
   mbid: string;
@@ -174,7 +176,7 @@ export function Player() {
 
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onDurationChange = () => setDuration(audio.duration || 0);
-    const onEnded = () => {
+    const onEnded = async () => {
       clearStallTimer();
       // Record listen history
       if (track) {
@@ -187,7 +189,10 @@ export function Player() {
       // Auto-advance
       nextTrack();
       const next = useQueueStore.getState().currentTrack();
-      if (next) play(next);
+      if (next) {
+        const resolved = await resolveTrackForPlayback(next);
+        if (resolved) play(resolved);
+      }
     };
     const onError = () => {
       clearStallTimer();
@@ -242,7 +247,7 @@ export function Player() {
             const next = useQueueStore.getState();
             next.nextTrack();
             const t = next.currentTrack();
-            if (t) play(t);
+            if (t) resolveTrackForPlayback(t).then((r) => { if (r) play(r); });
           } else {
             usePlayerStore.getState().seek(usePlayerStore.getState().currentTime + 5);
           }
@@ -282,7 +287,15 @@ export function Player() {
     if (liked) {
       unlikeTrack({ provider: track.provider, providerId: track.providerId });
     } else {
-      likeTrack({ provider: track.provider, providerId: track.providerId });
+      likeTrack({
+        provider: track.provider,
+        providerId: track.providerId,
+        title: track.title,
+        artist: track.artist,
+        album: track.album ?? undefined,
+        artworkUrl: track.artworkUrl ?? undefined,
+        duration: track.duration ?? undefined,
+      });
     }
   };
 
@@ -375,7 +388,9 @@ export function Player() {
       ? `https://www.youtube.com/watch?v=${track.providerId}`
       : track.provider === 'archive'
         ? `https://archive.org/details/${track.providerId}`
-        : `https://www.jamendo.com/track/${track.providerId}`
+        : track.provider === 'jamendo'
+          ? `https://www.jamendo.com/track/${track.providerId}`
+          : null
     : null;
 
   useEffect(() => {
@@ -442,7 +457,7 @@ export function Player() {
       const queue = useQueueStore.getState();
       queue.nextTrack();
       const next = queue.currentTrack();
-      if (next) usePlayerStore.getState().play(next);
+      if (next) resolveTrackForPlayback(next).then((r) => { if (r) usePlayerStore.getState().play(r); });
     });
 
     setHandler('previoustrack', () => {
@@ -454,7 +469,7 @@ export function Player() {
       const queue = useQueueStore.getState();
       queue.prevTrack();
       const prev = queue.currentTrack();
-      if (prev) player.play(prev);
+      if (prev) resolveTrackForPlayback(prev).then((r) => { if (r) player.play(r); });
     });
 
     setHandler('seekbackward', (details) => {
@@ -547,7 +562,7 @@ export function Player() {
       )}
 
       {isMobile ? (
-        /* Mobile: artwork + title/artist + play button */
+        /* Mobile: artwork + title/artist + like + playlist + play */
         <Box
           sx={{
             height: 56,
@@ -561,42 +576,40 @@ export function Player() {
           <Box sx={{ flexShrink: 0 }}>
             {track && <ArtworkImage src={track.artworkUrl} size={40} borderRadius={0.5} />}
           </Box>
-          <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ minWidth: 0, cursor: 'pointer' }} onClick={openTrackFromMobile}>
             {track && (
               <>
-                <Typography
-                  variant="body2"
-                  fontWeight={600}
-                  noWrap
-                  onClick={openTrackFromMobile}
-                  sx={{ fontSize: 13, cursor: 'pointer' }}
-                >
+                <Typography variant="body2" fontWeight={600} noWrap sx={{ fontSize: 13 }}>
                   {displayTitle}
                 </Typography>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  noWrap
-                  onClick={openTrackFromMobile}
-                  sx={{ fontSize: 11, cursor: 'pointer' }}
-                >
+                <Typography variant="caption" color="text.secondary" noWrap sx={{ fontSize: 11 }}>
                   {displayArtists}
                 </Typography>
               </>
             )}
           </Box>
-          <IconButton
-            onClick={() => togglePlay()}
-            sx={{
-              backgroundColor: '#FFDB4D',
-              color: '#000',
-              width: 36,
-              height: 36,
-              '&:hover': { backgroundColor: '#FFE680' },
-            }}
-          >
-            {isPlaying ? <PauseIcon sx={{ fontSize: 20 }} /> : <PlayArrowIcon sx={{ fontSize: 20 }} />}
-          </IconButton>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+            {isLoggedIn && track && (
+              <IconButton size="small" onClick={handleLike} sx={{ color: liked ? 'primary.main' : 'text.secondary', p: 0.75 }}>
+                {liked ? <FavoriteIcon sx={{ fontSize: 18 }} /> : <FavoriteBorderIcon sx={{ fontSize: 18 }} />}
+              </IconButton>
+            )}
+            {isLoggedIn && track && (
+              <AddToPlaylistButton track={track} size="small" sx={{ color: 'text.secondary', p: 0.75 }} stopPropagation={false} />
+            )}
+            <IconButton
+              onClick={() => togglePlay()}
+              sx={{
+                backgroundColor: '#FFDB4D',
+                color: '#000',
+                width: 36,
+                height: 36,
+                '&:hover': { backgroundColor: '#FFE680' },
+              }}
+            >
+              {isPlaying ? <PauseIcon sx={{ fontSize: 20 }} /> : <PlayArrowIcon sx={{ fontSize: 20 }} />}
+            </IconButton>
+          </Box>
         </Box>
       ) : (
         /* Desktop: progress bar on top, controls/info/actions below */
@@ -629,7 +642,7 @@ export function Player() {
                       fontWeight={600}
                       noWrap
                       onClick={openTrack}
-                      sx={{ cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}
+                      sx={{ cursor: 'pointer', '&:hover': { color: 'primary.main' } }}
                     >
                       {displayTitle}
                     </Typography>
@@ -642,7 +655,7 @@ export function Player() {
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
-                        '& .artist-link:hover': { color: 'text.primary', textDecoration: 'underline' },
+                        '& .artist-link:hover': { color: 'primary.main' },
                       }}
                     >
                       {parseArtistNames(track.artist).map((name, idx, arr) => (
@@ -663,7 +676,7 @@ export function Player() {
               )}
             </Box>
 
-            {/* Right: Like + Volume */}
+            {/* Right: Like + Playlist + Volume */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               {isLoggedIn && track && (
                 <Tooltip title={liked ? 'Убрать из любимых' : 'Добавить в любимые'}>
@@ -675,6 +688,14 @@ export function Player() {
                     {liked ? <FavoriteIcon fontSize="small" /> : <FavoriteBorderIcon fontSize="small" />}
                   </IconButton>
                 </Tooltip>
+              )}
+              {isLoggedIn && track && (
+                <AddToPlaylistButton
+                  track={track}
+                  size="small"
+                  sx={{ color: 'text.secondary' }}
+                  stopPropagation={false}
+                />
               )}
               <PlayerVolume />
               {track && providerUrl && (

@@ -1,13 +1,12 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { Box, Typography, Chip, IconButton, Tooltip } from '@mui/material';
+import { Box, Typography, Chip, IconButton, Tooltip, Skeleton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
-import MusicNoteIcon from '@mui/icons-material/MusicNote';
+import ShuffleIcon from '@mui/icons-material/Shuffle';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
-import { useAlbumDetail, AlbumTrack, useArtistProviderTracks } from '../api/hooks/useArtist';
-import { useSearch } from '../api/hooks/useSearch';
-import { useLikedIds, useAddLibraryAlbum, useRemoveLibraryAlbum, useLibraryAlbums } from '../api/hooks/useLibrary';
+import { useAlbumDetail } from '../api/hooks/useArtist';
+import { useAddLibraryAlbum, useRemoveLibraryAlbum, useLibraryAlbums } from '../api/hooks/useLibrary';
 import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
@@ -16,123 +15,38 @@ import { useQueueStore } from '../store/queue.store';
 import { useAuthStore } from '../store/auth.store';
 import { Track } from '../types';
 import { canonicalizeArtistName, formatAlbumName } from '../utils/trackText';
-
-/** Strip noise from titles for fuzzy matching. Supports Cyrillic and any Unicode. */
-function normalise(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/\(.*?\)/g, '')
-    .replace(/\[.*?\]/g, '')
-    .replace(/[-–—]\s*(?:official|audio|video|hd|hq|lyrics?|mv|remaster\w*|live|remix).*/gi, '')
-    .replace(/[^\p{L}\d]/gu, '') // keep any Unicode letter + digits, strip punctuation/spaces
-    .trim();
-}
-
-function titleMatches(n: string, t: Track): boolean {
-  const full = normalise(t.title);
-  const afterDash = t.title.includes(' - ')
-    ? normalise(t.title.split(' - ').slice(1).join(' - '))
-    : null;
-  for (const pn of [full, afterDash]) {
-    if (!pn) continue;
-    if (pn === n) return true;
-    const [longer, shorter] = pn.length >= n.length ? [pn, n] : [n, pn];
-    if (shorter.length >= longer.length * 0.75 && longer.startsWith(shorter)) return true;
-  }
-  return false;
-}
-
-function findMatch(mbTrack: AlbumTrack, providerTracks: Track[], albumArtist: string): Track | undefined {
-  const n = normalise(mbTrack.title);
-  if (!n) return undefined;
-  const na = normalise(albumArtist);
-
-  // First pass: require both artist AND title to match
-  if (na) {
-    for (const t of providerTracks) {
-      const ta = normalise(t.artist);
-      if ((ta.includes(na) || na.includes(ta)) && titleMatches(n, t)) return t;
-    }
-  }
-
-  // Second pass: title only (artist field may be unreliable on some providers)
-  for (const t of providerTracks) {
-    if (titleMatches(n, t)) return t;
-  }
-
-  return undefined;
-}
-
-function formatDuration(seconds: number | null): string {
-  if (!seconds) return '--:--';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
+import { resolveTrackForPlayback } from '../utils/resolveTrack';
 
 export function AlbumPage() {
   const { mbid = '' } = useParams<{ mbid: string }>();
-  const albumArtworkUrl = `https://coverartarchive.org/release-group/${mbid}/front-500`;
   const navigate = useNavigate();
   const { data: album, isLoading } = useAlbumDetail(mbid);
 
-  // Search providers by "artist album" to find streamable tracks for this album
-  const albumQuery = album
-    ? `${canonicalizeArtistName(album.artist)} ${formatAlbumName(album.title)}`
-    : '';
-  const { data: searchData } = useSearch(
-    { q: albumQuery, provider: 'all', type: 'track', page: 1, limit: 50 },
-    albumQuery.length > 0,
-  );
+  const albumArtworkUrl =
+    album?.artworkUrl ??
+    album?.artworkUrlRelease ??
+    `https://coverartarchive.org/release-group/${mbid}/front-500`;
 
-  // Also search by just artist name to cover more tracks
-  const artistQuery = album ? canonicalizeArtistName(album.artist) : '';
-  const { data: providerData } = useArtistProviderTracks(artistQuery, mbid);
-  const { data: artistData } = useSearch(
-    { q: artistQuery, provider: 'all', type: 'track', page: 1, limit: 30 },
-    artistQuery.length > 0,
-  );
-
-  // Merge provider-tracks (album-focused) + fallback search results
-  const providerTracks: Track[] = (() => {
-    const seen = new Set<string>();
-    const merged: Track[] = [];
-    for (const t of [
-      ...(providerData?.tracks ?? []),
-      ...(searchData?.tracks ?? []),
-      ...(artistData?.tracks ?? []),
-    ]) {
-      const key = `${t.provider}:${t.providerId}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push(t);
-      }
-    }
-    return merged;
-  })();
-
-  // Build the playable queue (only MB tracks that have a provider match)
+  // Build queue directly from MB tracklist — instant, no YouTube lookup at render time
   const albumArtist = album ? canonicalizeArtistName(album.artist) : '';
-  const playableQueue: Track[] = [];
-  for (const mbTrack of album?.tracks ?? []) {
-    const match = findMatch(mbTrack, providerTracks, albumArtist);
-    if (match && !playableQueue.find((t) => t.providerId === match.providerId)) {
-      playableQueue.push({
-        ...match,
-        albumMbid: mbid,
-        album: album?.title ?? match.album,
-        artworkUrl: albumArtworkUrl,
-      });
-    }
-  }
+  const mbQueue: Track[] = (album?.tracks ?? []).map((mbTrack) => ({
+    id: `musicbrainz:${mbTrack.mbid}`,
+    provider: 'musicbrainz' as const,
+    providerId: mbTrack.mbid,
+    title: mbTrack.title,
+    artist: albumArtist,
+    album: album?.title ?? '',
+    albumMbid: mbid,
+    duration: mbTrack.duration ?? undefined,
+    artworkUrl: albumArtworkUrl,
+  }));
 
-  const { data: likedSet } = useLikedIds(playableQueue);
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const { data: libraryAlbumsRaw } = useLibraryAlbums();
   const { mutate: addAlbum, isPending: isAddingAlbum } = useAddLibraryAlbum();
   const { mutate: removeAlbum, isPending: isRemovingAlbum } = useRemoveLibraryAlbum();
   const { play, pause, isPlaying } = usePlayerStore();
-  const { setQueue, currentTrack } = useQueueStore();
+  const { setQueue, toggleShuffle, currentTrack } = useQueueStore();
   const currentQueueTrack = currentTrack();
 
   if (isLoading) return <LoadingSpinner message="Загрузка альбома..." />;
@@ -144,10 +58,28 @@ export function AlbumPage() {
   const isAlbumSaved = Boolean(savedAlbumEntry);
   const albumActionPending = isAddingAlbum || isRemovingAlbum;
 
-  const handlePlayAll = () => {
-    if (!playableQueue.length) return;
-    setQueue(playableQueue, 0);
-    play(playableQueue[0]);
+  // Album is "playing" if current track belongs to this album
+  const isAlbumPlaying = isPlaying && currentQueueTrack?.albumMbid === mbid;
+
+  const handlePlayAll = async () => {
+    if (!mbQueue.length) return;
+    setQueue(mbQueue, 0);
+    const resolved = await resolveTrackForPlayback(mbQueue[0]);
+    if (resolved) play(resolved);
+  };
+
+  const handleShuffle = async () => {
+    if (!mbQueue.length) return;
+    toggleShuffle();
+    const idx = Math.floor(Math.random() * mbQueue.length);
+    setQueue(mbQueue, idx);
+    const resolved = await resolveTrackForPlayback(mbQueue[idx]);
+    if (resolved) play(resolved);
+  };
+
+  const handleAlbumPlayPause = () => {
+    if (isAlbumPlaying) { pause(); return; }
+    handlePlayAll();
   };
 
   const handleToggleAlbumLike = () => {
@@ -161,33 +93,18 @@ export function AlbumPage() {
       title: formatAlbumName(album.title),
       artist: canonicalizeArtistName(album.artist),
       artworkUrl: albumArtworkUrl,
-      firstReleaseDate: /^\d{4}$/.test(album.year) ? `${album.year}-01-01` : album.year,
+      firstReleaseDate: /^\d{4}$/.test(String(album.year)) ? `${album.year}-01-01` : String(album.year ?? ''),
       type: album.type || 'album',
     });
   };
 
-  const isAlbumPlaying =
-    isPlaying &&
-    playableQueue.some(
-      (t) =>
-        t.provider === currentQueueTrack?.provider &&
-        t.providerId === currentQueueTrack?.providerId,
-    );
-
   return (
     <Box>
       {/* Hero */}
-      <Box
-        sx={{
-          display: 'flex',
-          gap: 3,
-          mb: 4,
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-        }}
-      >
+      <Box sx={{ display: 'flex', gap: 3, mb: 4, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <ArtworkImage
           src={albumArtworkUrl}
+          fallbackSrc={album.artworkUrlRelease}
           size={200}
           borderRadius={1}
         />
@@ -206,18 +123,13 @@ export function AlbumPage() {
             {canonicalizeArtistName(album.artist)}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {album.year}
-            {playableQueue.length > 0 &&
-              ` • ${playableQueue.length} из ${album.tracks.length} доступно`}
+            {album.year} • {album.tracks.length} треков
           </Typography>
           <Box mt={2} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             <Tooltip title={isAlbumPlaying ? 'Пауза' : 'Слушать альбом'}>
               <IconButton
-                onClick={() => {
-                  if (isAlbumPlaying) pause();
-                  else handlePlayAll();
-                }}
-                disabled={!playableQueue.length}
+                onClick={handleAlbumPlayPause}
+                disabled={!mbQueue.length}
                 sx={{
                   backgroundColor: 'primary.main',
                   color: '#000',
@@ -230,6 +142,21 @@ export function AlbumPage() {
                 {isAlbumPlaying ? <PauseIcon /> : <PlayArrowIcon />}
               </IconButton>
             </Tooltip>
+            <Tooltip title="Перемешать">
+              <IconButton
+                onClick={handleShuffle}
+                disabled={!mbQueue.length}
+                sx={{
+                  width: 40, height: 40,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  color: 'text.secondary',
+                  '&:hover': { borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'rgba(255,255,255,0.06)' },
+                  '&:disabled': { opacity: 0.3 },
+                }}
+              >
+                <ShuffleIcon />
+              </IconButton>
+            </Tooltip>
             {isLoggedIn && (
               <Tooltip title={isAlbumSaved ? 'Убрать из библиотеки' : 'Добавить в библиотеку'}>
                 <span>
@@ -237,14 +164,10 @@ export function AlbumPage() {
                     onClick={handleToggleAlbumLike}
                     disabled={albumActionPending}
                     sx={{
-                      width: 40,
-                      height: 40,
+                      width: 40, height: 40,
                       border: '1px solid rgba(255,255,255,0.2)',
                       color: isAlbumSaved ? 'primary.main' : 'text.secondary',
-                      '&:hover': {
-                        borderColor: 'rgba(255,255,255,0.35)',
-                        backgroundColor: 'rgba(255,255,255,0.06)',
-                      },
+                      '&:hover': { borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'rgba(255,255,255,0.06)' },
                     }}
                   >
                     {isAlbumSaved ? <FavoriteIcon /> : <FavoriteBorderIcon />}
@@ -256,16 +179,13 @@ export function AlbumPage() {
         </Box>
       </Box>
 
-      {/* Integrated tracklist */}
+      {/* Tracklist */}
       <Box>
-        {/* Header row */}
         <Box
           sx={{
             display: 'grid',
             gridTemplateColumns: '40px 48px 1fr 80px 40px',
-            px: 2,
-            py: 0.5,
-            mb: 0.5,
+            px: 2, py: 0.5, mb: 0.5,
             borderBottom: '1px solid rgba(255,255,255,0.08)',
           }}
         >
@@ -276,94 +196,37 @@ export function AlbumPage() {
           <Box />
         </Box>
 
-        {album.tracks.map((mbTrack) => {
-          const providerTrack = findMatch(mbTrack, providerTracks, albumArtist);
-          const enrichedTrack = providerTrack
-            ? playableQueue.find(
-                (t) =>
-                  t.provider === providerTrack.provider &&
-                  t.providerId === providerTrack.providerId,
-              ) ?? providerTrack
-            : undefined;
-
-          if (providerTrack && enrichedTrack) {
-            const albumStyledTrack: Track = {
-              ...enrichedTrack,
-              album: formatAlbumName(album.title),
-              albumMbid: mbid,
-              artworkUrl: albumArtworkUrl,
-            };
-
-            // Playable - render as full TrackRow but with MB position number
-            return (
-              <Box key={mbTrack.mbid} sx={{ position: 'relative' }}>
-                {/* Position number overlay */}
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: 40,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    pointerEvents: 'none',
-                    zIndex: 1,
-                  }}
-                />
-                <TrackRow
-                  key={`${albumStyledTrack.provider}:${albumStyledTrack.providerId}`}
-                  track={albumStyledTrack}
-                  index={mbTrack.position - 1}
-                  showIndex
-                  queue={playableQueue}
-                  likedSet={likedSet}
-                  hideSecondaryText
-                  appendFeatToTitle
-                  primaryArtistName={canonicalizeArtistName(album.artist)}
-                  linkTitleToTrack
-                />
-              </Box>
-            );
-          }
-
-          // Not yet available from any provider - show as static row
-          return (
+        {isLoading ? (
+          Array.from({ length: 8 }).map((_, i) => (
             <Box
-              key={mbTrack.mbid}
-              sx={{
-                display: 'grid',
-                gridTemplateColumns: '40px 48px 1fr 80px 40px',
-                alignItems: 'center',
-                gap: 1,
-                px: 2,
-                py: 0.75,
-                borderRadius: 1,
-                opacity: 0.38,
-              }}
+              key={i}
+              sx={{ display: 'grid', gridTemplateColumns: '40px 48px 1fr 80px 40px', px: 2, py: 0.75, gap: 1, alignItems: 'center' }}
             >
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                textAlign="center"
-                sx={{ fontSize: 12 }}
-              >
-                {mbTrack.position}
-              </Typography>
-              <Box sx={{ width: 40, height: 40 }} />
-              <Box sx={{ minWidth: 0 }}>
-                <Typography variant="body2" noWrap>
-                  {mbTrack.title}
-                </Typography>
+              <Skeleton width={20} height={20} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+              <Skeleton variant="rectangular" width={40} height={40} sx={{ borderRadius: 0.5, bgcolor: 'rgba(255,255,255,0.06)' }} />
+              <Box>
+                <Skeleton width="60%" height={16} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
               </Box>
-              <Typography variant="caption" color="text.secondary" textAlign="right">
-                {formatDuration(mbTrack.duration)}
-              </Typography>
-              <MusicNoteIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
+              <Skeleton width={40} height={14} sx={{ ml: 'auto', bgcolor: 'rgba(255,255,255,0.06)' }} />
+              <Box />
             </Box>
-          );
-        })}
+          ))
+        ) : (
+          mbQueue.map((track, i) => (
+            <TrackRow
+              key={track.providerId}
+              track={track}
+              index={i}
+              showIndex
+              queue={mbQueue}
+              likedSet={new Set()}
+              hideSecondaryText
+              appendFeatToTitle
+              primaryArtistName={albumArtist}
+              linkTitleToTrack={false}
+            />
+          ))
+        )}
       </Box>
     </Box>
   );

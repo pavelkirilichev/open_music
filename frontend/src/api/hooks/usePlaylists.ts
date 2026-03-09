@@ -3,11 +3,12 @@ import { api } from '../client';
 import { Playlist } from '../../types';
 import { useAuthStore } from '../../store/auth.store';
 
-export function usePlaylists() {
+export function usePlaylists(options?: { withTracks?: boolean }) {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const withTracks = options?.withTracks ?? false;
   return useQuery<Playlist[]>({
-    queryKey: ['playlists'],
-    queryFn: () => api.get<Playlist[]>('/playlists'),
+    queryKey: ['playlists', { withTracks }],
+    queryFn: () => api.get<Playlist[]>('/playlists', withTracks ? { withTracks: 'true' } : undefined),
     enabled: isLoggedIn,
   });
 }

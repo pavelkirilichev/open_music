@@ -4,6 +4,7 @@ import MusicNoteIcon from '@mui/icons-material/MusicNote';
 
 interface ArtworkImageProps {
   src?: string;
+  fallbackSrc?: string;
   alt?: string;
   size?: number | string;
   borderRadius?: number | string;
@@ -12,14 +13,26 @@ interface ArtworkImageProps {
 
 export function ArtworkImage({
   src,
+  fallbackSrc,
   alt = 'Обложка альбома',
   size = 56,
   borderRadius = 1,
   sx,
 }: ArtworkImageProps) {
-  const [error, setError] = useState(false);
+  const [triedFallback, setTriedFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  if (!src || error) {
+  const effectiveSrc = (!triedFallback ? src : fallbackSrc) ?? src;
+
+  const handleError = () => {
+    if (!triedFallback && fallbackSrc && fallbackSrc !== src) {
+      setTriedFallback(true);
+    } else {
+      setFailed(true);
+    }
+  };
+
+  if (!effectiveSrc || failed) {
     return (
       <Box
         sx={{
@@ -42,11 +55,11 @@ export function ArtworkImage({
   return (
     <Box
       component="img"
-      src={src}
+      src={effectiveSrc}
       alt={alt}
       loading="lazy"
       decoding="async"
-      onError={() => setError(true)}
+      onError={handleError}
       sx={{
         width: size,
         height: size,

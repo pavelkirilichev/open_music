@@ -29,6 +29,8 @@ export interface AlbumDetailData {
   year: string;
   type?: string;
   tracks: AlbumTrack[];
+  artworkUrl?: string;
+  artworkUrlRelease?: string;
 }
 
 export interface MBRecording {
@@ -96,6 +98,30 @@ export function useAlbumSearch(q: string, page = 1, enabled = true) {
       api.get<AlbumSearchResult>('/artists/search-albums', { q, page } as Record<string, unknown>),
     enabled: enabled && q.length > 0,
     staleTime: 1000 * 60 * 30,
+  });
+}
+
+export function useArtistImage(name: string) {
+  return useQuery<{ imageUrl: string | null }>({
+    queryKey: ['artist-image', name],
+    queryFn: () => api.get<{ imageUrl: string | null }>('/artists/image', { name } as Record<string, unknown>),
+    enabled: name.length > 0,
+    staleTime: 1000 * 60 * 60 * 24, // 24h
+    gcTime: 1000 * 60 * 60 * 48,
+  });
+}
+
+export function useMbTracks(name: string, albumMbid?: string) {
+  return useQuery<ArtistProviderTracksData>({
+    queryKey: ['artist-mb-tracks', name, albumMbid],
+    queryFn: () =>
+      api.get<ArtistProviderTracksData>('/artists/mb-tracks', {
+        name,
+        ...(albumMbid ? { albumMbid } : {}),
+      } as Record<string, unknown>),
+    enabled: name.length > 0,
+    staleTime: 1000 * 60 * 60 * 4, // 4h
+    gcTime: 1000 * 60 * 60 * 8,
   });
 }
 

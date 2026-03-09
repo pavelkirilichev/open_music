@@ -15,7 +15,7 @@ import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import { useInfiniteSearch } from '../api/hooks/useSearch';
 import { useLikedIds, useAddLibraryAlbum, useLibraryAlbums, useLibraryArtists, useAddLibraryArtist } from '../api/hooks/useLibrary';
-import { useAlbumSearch, useArtistAlbums, AlbumItem } from '../api/hooks/useArtist';
+import { useAlbumSearch, useArtistAlbums, useArtistImage, AlbumItem } from '../api/hooks/useArtist';
 import { useAuthStore } from '../store/auth.store';
 import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
@@ -159,6 +159,9 @@ export function SearchPage() {
   const isFoundArtistSaved =
     displayFoundArtistName.length > 0 && savedArtistNames.has(displayFoundArtistName.toLowerCase());
 
+  const { data: artistImageData } = useArtistImage(displayFoundArtistName);
+  const artistImageUrl = artistImageData?.imageUrl ?? null;
+
   // Infinite scroll sentinel
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -214,7 +217,18 @@ export function SearchPage() {
               transition: 'background-color 0.2s',
             }}
           >
-            <ArtworkImage src={albums[0]?.artworkUrl} size={64} borderRadius={32} />
+            <Box
+              sx={{
+                width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
+                background: artistImageUrl ? 'none' : 'linear-gradient(135deg, #FFDB4D 0%, #FF8C00 100%)',
+                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {artistImageUrl
+                ? <img src={artistImageUrl} alt={displayFoundArtistName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <span style={{ fontSize: 28, color: '#000' }}>🎤</span>
+              }
+            </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="caption" color="text.secondary">
                 Исполнитель

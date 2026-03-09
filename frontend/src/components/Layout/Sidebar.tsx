@@ -1,7 +1,5 @@
 import { Box, List, ListItemButton, ListItemIcon, ListItemText, Typography, IconButton, Divider, useMediaQuery, useTheme } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
-import HomeIcon from '@mui/icons-material/Home';
-import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
 import SearchIcon from '@mui/icons-material/Search';
 import LibraryMusicIcon from '@mui/icons-material/LibraryMusic';
 import LibraryMusicOutlinedIcon from '@mui/icons-material/LibraryMusicOutlined';
@@ -12,7 +10,6 @@ import { useAuthStore } from '../../store/auth.store';
 import { usePlaylists, useCreatePlaylist } from '../../api/hooks/usePlaylists';
 
 const NAV_ITEMS = [
-  { label: 'Главная', icon: HomeOutlinedIcon, activeIcon: HomeIcon, path: '/' },
   { label: 'Поиск', icon: SearchIcon, activeIcon: SearchIcon, path: '/search' },
   { label: 'Библиотека', icon: LibraryMusicOutlinedIcon, activeIcon: LibraryMusicIcon, path: '/library' },
 ];

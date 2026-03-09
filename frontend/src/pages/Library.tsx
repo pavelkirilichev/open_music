@@ -14,6 +14,8 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PersonIcon from '@mui/icons-material/Person';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import ShuffleIcon from '@mui/icons-material/Shuffle';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import {
   useLikedTracks,
   useLibraryAlbums,
@@ -25,6 +27,29 @@ import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { canonicalizeArtistName, formatAlbumName, formatArtistNames } from '../utils/trackText';
+import { useArtistImage } from '../api/hooks/useArtist';
+import { usePlayerStore } from '../store/player.store';
+import { useQueueStore } from '../store/queue.store';
+
+function ArtistCircle({ name }: { name: string }) {
+  const { data } = useArtistImage(name);
+  const url = data?.imageUrl ?? null;
+  return (
+    <Box
+      sx={{
+        width: 100, height: 100, borderRadius: '50%', mx: 'auto',
+        background: url ? 'none' : 'linear-gradient(135deg, #FFDB4D 0%, #FF8C00 100%)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        mb: 1, overflow: 'hidden', flexShrink: 0,
+      }}
+    >
+      {url
+        ? <img src={url} alt={name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        : <PersonIcon sx={{ fontSize: 40, color: '#000' }} />
+      }
+    </Box>
+  );
+}
 
 function getAlbumArtworkUrl(albumRef: Record<string, unknown>): string | undefined {
   const artworkUrl = typeof albumRef.artworkUrl === 'string' ? albumRef.artworkUrl : undefined;
@@ -94,6 +119,23 @@ export function LibraryPage() {
     [allTracks],
   );
 
+  const { play } = usePlayerStore();
+  const { setQueue, toggleShuffle } = useQueueStore();
+
+  const handlePlayAll = () => {
+    if (!allTracks.length) return;
+    setQueue(allTracks, 0);
+    play(allTracks[0]);
+  };
+
+  const handleShuffle = () => {
+    if (!allTracks.length) return;
+    toggleShuffle();
+    const idx = Math.floor(Math.random() * allTracks.length);
+    setQueue(allTracks, idx);
+    play(allTracks[idx]);
+  };
+
   const { data: albums, isLoading: albumsLoading } = useLibraryAlbums();
   const { data: artists, isLoading: artistsLoading } = useLibraryArtists();
   const { mutate: removeArtist } = useRemoveLibraryArtist();
@@ -131,21 +173,8 @@ export function LibraryPage() {
                   position: 'relative',
                 }}
               >
-                <Box
-                  onClick={() => navigate(`/artist/${encodeURIComponent(canonicalizeArtistName(a.artistRef.name))}`)}
-                  sx={{
-                    width: 100,
-                    height: 100,
-                    borderRadius: '50%',
-                    mx: 'auto',
-                    background: 'linear-gradient(135deg, #FFDB4D 0%, #FF8C00 100%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    mb: 1,
-                  }}
-                >
-                  <PersonIcon sx={{ fontSize: 40, color: '#000' }} />
+                <Box onClick={() => navigate(`/artist/${encodeURIComponent(canonicalizeArtistName(a.artistRef.name))}`)}>
+                  <ArtistCircle name={canonicalizeArtistName(a.artistRef.name)} />
                 </Box>
                 <Typography
                   variant="body2"
@@ -239,6 +268,20 @@ export function LibraryPage() {
           <Typography variant="h6" fontWeight={700}>
             Любимые треки {total > 0 ? `(${total})` : ''}
           </Typography>
+          {allTracks.length > 0 && (
+            <>
+              <Tooltip title="Слушать всё">
+                <IconButton size="small" onClick={handlePlayAll} sx={{ color: 'primary.main' }}>
+                  <PlayArrowIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Перемешать">
+                <IconButton size="small" onClick={handleShuffle} sx={{ color: 'primary.main' }}>
+                  <ShuffleIcon />
+                </IconButton>
+              </Tooltip>
+            </>
+          )}
           {allTracks.length > 0 && (
             <TextField
               size="small"

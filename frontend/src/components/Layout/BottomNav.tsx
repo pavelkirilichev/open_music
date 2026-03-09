@@ -1,13 +1,14 @@
 import { Box, useMediaQuery, useTheme } from '@mui/material';
 import { useNavigate, useLocation } from 'react-router-dom';
-import HomeIcon from '@mui/icons-material/Home';
 import SearchIcon from '@mui/icons-material/Search';
 import LibraryMusicIcon from '@mui/icons-material/LibraryMusic';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import { useAuthStore } from '../../store/auth.store';
 
 const NAV_ITEMS = [
-  { label: 'Главная', icon: HomeIcon, path: '/' },
-  { label: 'Поиск', icon: SearchIcon, path: '/search' },
-  { label: 'Библиотека', icon: LibraryMusicIcon, path: '/library' },
+  { label: 'Поиск', icon: SearchIcon, path: '/search', authOnly: false },
+  { label: 'Библиотека', icon: LibraryMusicIcon, path: '/library', authOnly: true },
+  { label: 'Импорт', icon: CloudDownloadIcon, path: '/import', authOnly: true },
 ];
 
 export function BottomNav() {
@@ -15,8 +16,11 @@ export function BottomNav() {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const navigate = useNavigate();
   const location = useLocation();
+  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
 
   if (!isMobile) return null;
+
+  const visibleItems = NAV_ITEMS.filter((item) => !item.authOnly || isLoggedIn);
 
   return (
     <Box
@@ -33,8 +37,8 @@ export function BottomNav() {
         pb: 'env(safe-area-inset-bottom, 0px)',
       }}
     >
-      {NAV_ITEMS.map(({ label, icon: Icon, path }) => {
-        const active = path === '/' ? location.pathname === path : location.pathname.startsWith(path);
+      {visibleItems.map(({ label, icon: Icon, path }) => {
+        const active = location.pathname.startsWith(path);
         return (
           <Box
             key={path}

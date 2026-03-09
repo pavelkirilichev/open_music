@@ -1,4 +1,4 @@
-export type Provider = 'youtube' | 'archive' | 'jamendo' | 'soundcloud' | 'zaycev' | 'rutracker' | 'vk';
+export type Provider = 'youtube' | 'archive' | 'jamendo' | 'soundcloud' | 'zaycev' | 'rutracker' | 'vk' | 'musicbrainz';
 
 export interface Track {
   id: string;
@@ -8,6 +8,7 @@ export interface Track {
   artist: string;
   album?: string;
   albumMbid?: string;
+  mbid?: string;       // original MB recording MBID (set after YouTube resolution)
   duration?: number; // seconds
   artworkUrl?: string;
   year?: number;

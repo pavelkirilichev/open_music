@@ -202,7 +202,7 @@ export function TrackDetailPage() {
             fontWeight={400}
             component={Link}
             to={`/artist/${encodeURIComponent(primaryArtist)}`}
-            sx={{ mb: 1, display: 'block', textDecoration: 'none', '&:hover': { color: 'text.primary', textDecoration: 'underline' } }}
+            sx={{ mb: 1, display: 'block', textDecoration: 'none', '&:hover': { color: 'primary.main' } }}
           >
             {displayArtists}
           </Typography>

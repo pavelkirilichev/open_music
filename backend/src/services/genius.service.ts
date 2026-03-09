@@ -75,7 +75,16 @@ function scoreHit(hit: GeniusSearchHit, title: string, artist: string): number {
   const hitTitle = normalizeForMatch(result.title ?? result.full_title ?? '');
   const hitArtist = normalizeForMatch(result.primary_artist?.name ?? result.artist_names ?? '');
 
-  let score = tokenScore(queryTitle, hitTitle) * 0.7 + tokenScore(queryArtist, hitArtist) * 0.3;
+  // Bidirectional token score: query→candidate AND candidate→query
+  const titleScore = Math.max(
+    tokenScore(queryTitle, hitTitle),
+    tokenScore(hitTitle, queryTitle),
+  );
+  const artistScore = Math.max(
+    tokenScore(queryArtist, hitArtist),
+    tokenScore(hitArtist, queryArtist),
+  );
+  let score = titleScore * 0.7 + artistScore * 0.3;
 
   if (queryTitle && hitTitle && (hitTitle.includes(queryTitle) || queryTitle.includes(hitTitle))) {
     score += 0.2;
@@ -85,6 +94,8 @@ function scoreHit(hit: GeniusSearchHit, title: string, artist: string): number {
   }
   return score;
 }
+
+const MIN_SCORE = 0.45;
 
 function extractCookieHeader(headers: Headers): string {
   const withGetSetCookie = headers as Headers & { getSetCookie?: () => string[] };
@@ -160,13 +171,8 @@ function extractLyricsFromHtml(html: string): string | null {
   return lyrics || null;
 }
 
-async function searchOnGenius(artist: string, title: string): Promise<{
-  hit: GeniusSearchHit | null;
-  cookieHeader: string;
-}> {
-  const query = `${artist} ${title}`.trim();
+async function geniusApiSearch(query: string): Promise<{ hits: GeniusSearchHit[]; cookieHeader: string }> {
   const url = `${GENIUS_SEARCH_URL}?q=${encodeURIComponent(query)}`;
-
   const response = await fetch(url, {
     headers: {
       'User-Agent': USER_AGENT,
@@ -177,34 +183,54 @@ async function searchOnGenius(artist: string, title: string): Promise<{
       'accept-language': 'en-US,en;q=0.9',
     },
   });
-
-  if (!response.ok) {
-    throw new Error(`Genius search failed: ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(`Genius search failed: ${response.status}`);
   const cookieHeader = extractCookieHeader(response.headers);
   const data = (await response.json()) as GeniusSearchResponse;
-  const hits =
-    data.response?.sections?.flatMap((section) =>
-      section.type === 'song' ? section.hits ?? [] : [],
-    ) ?? [];
+  const hits = data.response?.sections?.flatMap((s) => s.type === 'song' ? s.hits ?? [] : []) ?? [];
+  return { hits, cookieHeader };
+}
 
-  if (!hits.length) {
-    return { hit: null, cookieHeader };
-  }
-
+function pickBest(hits: GeniusSearchHit[], title: string, artist: string): { hit: GeniusSearchHit; score: number } | null {
   let bestHit: GeniusSearchHit | null = null;
   let bestScore = -1;
-
   for (const hit of hits) {
     const score = scoreHit(hit, title, artist);
-    if (score > bestScore) {
-      bestScore = score;
-      bestHit = hit;
+    if (score > bestScore) { bestScore = score; bestHit = hit; }
+  }
+  return bestHit && bestScore >= 0 ? { hit: bestHit, score: bestScore } : null;
+}
+
+async function searchOnGenius(artist: string, title: string): Promise<{
+  hit: GeniusSearchHit | null;
+  cookieHeader: string;
+}> {
+  // Strip parenthetical content from title for a cleaner query
+  const cleanTitle = title.replace(/[\(\[\{][^\)\]\}]*[\)\]\}]/g, '').replace(/\s{2,}/g, ' ').trim();
+
+  // Query strategies in priority order
+  const queries = [
+    `${artist} ${title}`,
+    `${artist} ${cleanTitle}`,
+    `${title} ${artist}`,
+    cleanTitle !== title ? cleanTitle : null,
+    title,
+  ].filter((q, i, arr): q is string => Boolean(q) && arr.indexOf(q) === i);
+
+  let lastCookieHeader = '';
+  for (const query of queries) {
+    try {
+      const { hits, cookieHeader } = await geniusApiSearch(query);
+      lastCookieHeader = cookieHeader || lastCookieHeader;
+      const best = pickBest(hits, title, artist);
+      if (best && best.score >= MIN_SCORE) {
+        return { hit: best.hit, cookieHeader };
+      }
+    } catch {
+      // try next query
     }
   }
 
-  return { hit: bestHit, cookieHeader };
+  return { hit: null, cookieHeader: lastCookieHeader };
 }
 
 async function fetchLyricsFromSongPage(url: string, cookieHeader: string): Promise<string | null> {

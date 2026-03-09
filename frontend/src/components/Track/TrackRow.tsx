@@ -8,6 +8,7 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
+  CircularProgress,
   useMediaQuery,
   useTheme,
 } from '@mui/material';
@@ -29,6 +30,8 @@ import { useLikeTrack, useUnlikeTrack } from '../../api/hooks/useLibrary';
 import { useAuthStore } from '../../store/auth.store';
 import { api } from '../../api/client';
 import { formatAlbumName, formatArtistNames, parseArtistNames, sanitizeTrackTitle, withFeaturedInTitle } from '../../utils/trackText';
+import { AddToPlaylistButton } from './AddToPlaylistButton';
+import { resolveTrackForPlayback } from '../../utils/resolveTrack';
 
 interface TrackRowProps {
   track: Track;
@@ -36,7 +39,6 @@ interface TrackRowProps {
   showIndex?: boolean;
   queue?: Track[];
   likedSet?: Set<string>; // "provider:providerId" passed from parent, no N+1
-  onAddToPlaylist?: (track: Track) => void;
   hideSecondaryText?: boolean;
   showAlbumRight?: boolean;
   appendFeatToTitle?: boolean;
@@ -57,7 +59,6 @@ export function TrackRow({
   showIndex,
   queue,
   likedSet,
-  onAddToPlaylist,
   hideSecondaryText = false,
   showAlbumRight = false,
   appendFeatToTitle = false,
@@ -66,6 +67,7 @@ export function TrackRow({
 }: TrackRowProps) {
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [hovered, setHovered] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -73,9 +75,10 @@ export function TrackRow({
   const { play, pause, isPlaying } = usePlayerStore();
   const { setQueue, currentTrack } = useQueueStore();
   const currentQueueTrack = currentTrack();
+  // Match by provider+id OR by mbid (after resolution, resolved track has mbid = original MB recording id)
   const isCurrentTrack =
-    currentQueueTrack?.provider === track.provider &&
-    currentQueueTrack?.providerId === track.providerId;
+    (currentQueueTrack?.provider === track.provider && currentQueueTrack?.providerId === track.providerId) ||
+    (track.provider === 'musicbrainz' && currentQueueTrack?.mbid === track.providerId);
   const displayTitle = appendFeatToTitle
     ? withFeaturedInTitle(track.title, track.artist, primaryArtistName)
     : sanitizeTrackTitle(track.title, track.artist);
@@ -87,24 +90,43 @@ export function TrackRow({
   const { mutate: likeTrack } = useLikeTrack();
   const { mutate: unlikeTrack } = useUnlikeTrack();
 
-  const handlePlay = () => {
+  const handlePlay = async () => {
     if (isCurrentTrack) {
       if (isPlaying) pause();
       else play();
+      return;
+    }
+    const tracks = queue ?? [track];
+    const idx = queue ? queue.findIndex((t) => t.providerId === track.providerId) : 0;
+    setQueue(tracks, idx >= 0 ? idx : 0);
+
+    if (track.provider === 'musicbrainz') {
+      setIsResolving(true);
+      try {
+        const resolved = await resolveTrackForPlayback(track);
+        if (resolved) play(resolved);
+      } finally {
+        setIsResolving(false);
+      }
     } else {
-      const tracks = queue ?? [track];
-      const idx = queue ? queue.findIndex((t) => t.providerId === track.providerId) : 0;
-      setQueue(tracks, idx >= 0 ? idx : 0);
       play(track);
     }
   };
 
   const handleLike = () => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || track.provider === 'musicbrainz') return;
     if (liked) {
       unlikeTrack({ provider: track.provider, providerId: track.providerId });
     } else {
-      likeTrack({ provider: track.provider, providerId: track.providerId });
+      likeTrack({
+        provider: track.provider,
+        providerId: track.providerId,
+        title: track.title,
+        artist: track.artist,
+        album: track.album ?? undefined,
+        artworkUrl: track.artworkUrl ?? undefined,
+        duration: track.duration ?? undefined,
+      });
     }
   };
 
@@ -126,7 +148,9 @@ export function TrackRow({
       ? `https://www.youtube.com/watch?v=${track.providerId}`
       : track.provider === 'archive'
         ? `https://archive.org/details/${track.providerId}`
-        : `https://www.jamendo.com/track/${track.providerId}`;
+        : track.provider === 'jamendo'
+          ? `https://www.jamendo.com/track/${track.providerId}`
+          : null;
 
   // Mobile: simplified 3-column layout (artwork + info, duration, menu)
   if (isMobile) {
@@ -148,7 +172,7 @@ export function TrackRow({
         {/* Artwork */}
         <Box sx={{ position: 'relative', flexShrink: 0 }}>
           <ArtworkImage src={track.artworkUrl} size={44} borderRadius={0.5} />
-          {isCurrentTrack && (
+          {(isCurrentTrack || isResolving) && (
             <Box
               sx={{
                 position: 'absolute',
@@ -160,7 +184,9 @@ export function TrackRow({
                 borderRadius: 0.5,
               }}
             >
-              {isPlaying ? (
+              {isResolving ? (
+                <CircularProgress size={16} sx={{ color: 'white' }} />
+              ) : isPlaying ? (
                 <PauseIcon sx={{ color: 'white', fontSize: 20 }} />
               ) : (
                 <PlayArrowIcon sx={{ color: 'white', fontSize: 20 }} />
@@ -180,7 +206,7 @@ export function TrackRow({
             sx={{
               fontSize: 13,
               cursor: linkTitleToTrack ? 'pointer' : 'default',
-              '&:hover': linkTitleToTrack ? { textDecoration: 'underline' } : undefined,
+              '&:hover': linkTitleToTrack ? { color: 'primary.main' } : undefined,
             }}
           >
             {displayTitle}
@@ -194,6 +220,9 @@ export function TrackRow({
         </Box>
 
         {/* Actions */}
+        {isLoggedIn && (
+          <AddToPlaylistButton track={track} size="small" sx={{ color: 'text.secondary', flexShrink: 0 }} />
+        )}
         <IconButton
           size="small"
           onClick={(e) => { e.stopPropagation(); setMenuAnchor(e.currentTarget); }}
@@ -207,7 +236,7 @@ export function TrackRow({
           anchorEl={menuAnchor}
           open={Boolean(menuAnchor)}
           onClose={() => setMenuAnchor(null)}
-          PaperProps={{ sx: { backgroundColor: '#282828', minWidth: 200 } }}
+          slotProps={{ paper: { sx: { backgroundColor: '#282828', minWidth: 200 } } }}
         >
           {isLoggedIn && (
             <MenuItem onClick={(e) => { e.stopPropagation(); handleLike(); setMenuAnchor(null); }}>
@@ -225,28 +254,24 @@ export function TrackRow({
             <ListItemIcon><QueueMusicIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Добавить в очередь</ListItemText>
           </MenuItem>
-          {onAddToPlaylist && (
-            <MenuItem onClick={(e) => { e.stopPropagation(); onAddToPlaylist(track); setMenuAnchor(null); }}>
-              <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-              <ListItemText>Добавить в плейлист</ListItemText>
-            </MenuItem>
-          )}
           {isLoggedIn && (
             <MenuItem onClick={(e) => { e.stopPropagation(); handleCache(); }}>
               <ListItemIcon><CloudDownloadIcon fontSize="small" /></ListItemIcon>
               <ListItemText>Сохранить для офлайна</ListItemText>
             </MenuItem>
           )}
-          <MenuItem
-            component="a"
-            href={providerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Открыть источник</ListItemText>
-          </MenuItem>
+          {providerUrl && (
+            <MenuItem
+              component="a"
+              href={providerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
+              <ListItemText>Открыть источник</ListItemText>
+            </MenuItem>
+          )}
         </Menu>
       </Box>
     );
@@ -260,8 +285,8 @@ export function TrackRow({
       sx={{
         display: 'grid',
         gridTemplateColumns: showAlbumRight
-          ? (showIndex ? '40px 48px 1fr minmax(120px, 0.55fr) 72px 40px' : '48px 1fr minmax(120px, 0.55fr) 72px 40px')
-          : (showIndex ? '40px 48px 1fr 80px 40px' : '48px 1fr 80px 40px'),
+          ? (showIndex ? '40px 48px 1fr minmax(120px, 0.55fr) 72px 80px' : '48px 1fr minmax(120px, 0.55fr) 72px 80px')
+          : (showIndex ? '40px 48px 1fr 80px 80px' : '48px 1fr 80px 80px'),
         alignItems: 'center',
         gap: 1,
         px: 2,
@@ -276,7 +301,9 @@ export function TrackRow({
       {/* Index / Play indicator */}
       {showIndex && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {hovered || isCurrentTrack ? (
+          {isResolving ? (
+            <CircularProgress size={16} sx={{ color: 'text.secondary' }} />
+          ) : hovered || isCurrentTrack ? (
             <IconButton size="small" onClick={handlePlay} sx={{ p: 0.5, color: 'white' }}>
               {isCurrentTrack && isPlaying ? (
                 <PauseIcon fontSize="small" />
@@ -326,7 +353,7 @@ export function TrackRow({
           onClick={linkTitleToTrack ? handleOpenTrack : undefined}
           sx={{
             cursor: linkTitleToTrack ? 'pointer' : 'default',
-            '&:hover': linkTitleToTrack ? { textDecoration: 'underline' } : undefined,
+            '&:hover': linkTitleToTrack ? { color: 'primary.main' } : undefined,
           }}
         >
           {displayTitle}
@@ -341,7 +368,7 @@ export function TrackRow({
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              '& .artist-link:hover': { color: 'text.primary', textDecoration: 'underline' },
+              '& .artist-link:hover': { color: 'primary.main' },
             }}
           >
             {parseArtistNames(track.artist).map((name, idx, arr) => (
@@ -394,6 +421,13 @@ export function TrackRow({
             </IconButton>
           </Tooltip>
         )}
+        {isLoggedIn && (
+          <AddToPlaylistButton
+            track={track}
+            size="small"
+            sx={{ opacity: hovered ? 1 : 0, color: 'text.secondary', transition: 'opacity 0.2s' }}
+          />
+        )}
         <IconButton
           size="small"
           onClick={(e) => setMenuAnchor(e.currentTarget)}
@@ -408,7 +442,7 @@ export function TrackRow({
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
         onClose={() => setMenuAnchor(null)}
-        PaperProps={{ sx: { backgroundColor: '#282828', minWidth: 200 } }}
+        slotProps={{ paper: { sx: { backgroundColor: '#282828', minWidth: 200 } } }}
       >
         <MenuItem onClick={() => { useQueueStore.getState().addNext(track); setMenuAnchor(null); }}>
           <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
@@ -418,22 +452,18 @@ export function TrackRow({
           <ListItemIcon><QueueMusicIcon fontSize="small" /></ListItemIcon>
           <ListItemText>Добавить в очередь</ListItemText>
         </MenuItem>
-        {onAddToPlaylist && (
-          <MenuItem onClick={() => { onAddToPlaylist(track); setMenuAnchor(null); }}>
-            <ListItemIcon><PlaylistAddIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Добавить в плейлист</ListItemText>
-          </MenuItem>
-        )}
         {isLoggedIn && (
           <MenuItem onClick={handleCache}>
             <ListItemIcon><CloudDownloadIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Сохранить для офлайна</ListItemText>
           </MenuItem>
         )}
-        <MenuItem component="a" href={providerUrl} target="_blank" rel="noopener noreferrer">
-          <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Открыть источник</ListItemText>
-        </MenuItem>
+        {providerUrl && (
+          <MenuItem component="a" href={providerUrl} target="_blank" rel="noopener noreferrer">
+            <ListItemIcon><OpenInNewIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Открыть источник</ListItemText>
+          </MenuItem>
+        )}
       </Menu>
     </Box>
   );

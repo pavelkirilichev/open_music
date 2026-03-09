@@ -27,11 +27,21 @@ libraryRouter.get('/tracks', validate(tracksQuerySchema, 'query'), async (req, r
   }
 });
 
+const likeTrackBodySchema = z.object({
+  title: z.string().max(500).optional(),
+  artist: z.string().max(500).optional(),
+  album: z.string().max(500).optional(),
+  artworkUrl: z.string().url().optional(),
+  duration: z.number().optional(),
+}).optional();
+
 // POST /api/library/tracks/:provider/:id
 libraryRouter.post('/tracks/:provider/:id', async (req, res, next) => {
   try {
     const { provider, id } = req.params;
-    const result = await libraryService.likeTrack(req.user!.sub, provider, id);
+    const body = likeTrackBodySchema.safeParse(req.body);
+    const meta = body.success ? body.data : undefined;
+    const result = await libraryService.likeTrack(req.user!.sub, provider, id, meta);
     res.json(result);
   } catch (err) {
     next(err);

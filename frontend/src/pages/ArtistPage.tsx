@@ -9,13 +9,14 @@ import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import { useLikedIds, useLibraryArtists, useAddLibraryArtist } from '../api/hooks/useLibrary';
 import { useAuthStore } from '../store/auth.store';
-import { useArtistAlbums, useArtistProviderTracks } from '../api/hooks/useArtist';
+import { useArtistAlbums, useMbTracks, useArtistImage } from '../api/hooks/useArtist';
 import { TrackRow } from '../components/Track/TrackRow';
 import { ArtworkImage } from '../components/Common/ArtworkImage';
 import { LoadingSpinner } from '../components/Common/LoadingSpinner';
 import { usePlayerStore } from '../store/player.store';
 import { useQueueStore } from '../store/queue.store';
 import { Track } from '../types';
+import { resolveTrackForPlayback } from '../utils/resolveTrack';
 
 const PAGE_SIZE = 30;
 
@@ -27,8 +28,8 @@ export function ArtistPage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
-  // Provider tracks — comprehensive, sourced from per-album searches
-  const { data: providerData, isLoading: tracksLoading } = useArtistProviderTracks(artistName);
+  // Provider tracks — MusicBrainz metadata, no YouTube lookup at render time
+  const { data: providerData, isLoading: tracksLoading } = useMbTracks(artistName);
   const allTracks: Track[] = providerData?.tracks ?? [];
 
   // Paginate client-side (no extra requests)
@@ -49,19 +50,24 @@ export function ArtistPage() {
   );
   const isArtistSaved = savedArtistNames.has(artistName.toLowerCase());
 
-  const handlePlayAll = () => {
+  const handlePlayAll = async () => {
     if (!allTracks.length) return;
     setQueue(allTracks, 0);
-    play(allTracks[0]);
+    const resolved = await resolveTrackForPlayback(allTracks[0]);
+    if (resolved) play(resolved);
   };
 
-  const handleShuffle = () => {
+  const handleShuffle = async () => {
     if (!allTracks.length) return;
     toggleShuffle();
     const idx = Math.floor(Math.random() * allTracks.length);
     setQueue(allTracks, idx);
-    play(allTracks[idx]);
+    const resolved = await resolveTrackForPlayback(allTracks[idx]);
+    if (resolved) play(resolved);
   };
+
+  const { data: artistImageData } = useArtistImage(artistName);
+  const artistImageUrl = artistImageData?.imageUrl ?? null;
 
   // Discography from MusicBrainz
   const { data: albumsData, isLoading: albumsLoading } = useArtistAlbums(artistName);
@@ -94,6 +100,7 @@ export function ArtistPage() {
         }}
       >
         <Avatar
+          src={artistImageUrl ?? undefined}
           sx={{
             width: { xs: 80, md: 120 },
             height: { xs: 80, md: 120 },

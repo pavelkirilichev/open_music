@@ -82,10 +82,31 @@ export function useLikedIds(tracks: Array<{ provider: string; providerId: string
 export function useLikeTrack() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ provider, providerId }: { provider: string; providerId: string }) =>
-      api.post(`/library/tracks/${provider}/${providerId}`),
+    mutationFn: ({
+      provider,
+      providerId,
+      title,
+      artist,
+      album,
+      artworkUrl,
+      duration,
+    }: {
+      provider: string;
+      providerId: string;
+      title?: string;
+      artist?: string;
+      album?: string;
+      artworkUrl?: string;
+      duration?: number;
+    }) =>
+      api.post(`/library/tracks/${provider}/${providerId}`, {
+        title,
+        artist,
+        album,
+        artworkUrl,
+        duration,
+      }),
     onSuccess: () => {
-      // Invalidate both liked tracks list and all batch caches
       qc.invalidateQueries({ queryKey: ['library', 'tracks'] });
       qc.invalidateQueries({ queryKey: ['library', 'liked-batch'] });
     },

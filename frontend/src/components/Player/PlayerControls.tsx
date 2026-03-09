@@ -9,6 +9,7 @@ import RepeatOneIcon from '@mui/icons-material/RepeatOne';
 import { usePlayerStore } from '../../store/player.store';
 import { useQueueStore } from '../../store/queue.store';
 import { RepeatMode } from '../../types';
+import { resolveTrackForPlayback } from '../../utils/resolveTrack';
 
 const REPEAT_CYCLE: RepeatMode[] = ['none', 'all', 'one'];
 
@@ -21,13 +22,13 @@ export function PlayerControls() {
   const handleNext = () => {
     nextTrack();
     const track = useQueueStore.getState().currentTrack();
-    if (track) play(track);
+    if (track) resolveTrackForPlayback(track).then((r) => { if (r) play(r); });
   };
 
   const handlePrev = () => {
     prevTrack();
     const track = useQueueStore.getState().currentTrack();
-    if (track) play(track);
+    if (track) resolveTrackForPlayback(track).then((r) => { if (r) play(r); });
   };
 
   const cycleRepeat = () => {

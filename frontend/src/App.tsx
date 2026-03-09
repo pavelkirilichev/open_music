@@ -1,7 +1,6 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/Layout/AppLayout';
-import { Home } from './pages/Home';
 import { LoadingSpinner } from './components/Common/LoadingSpinner';
 import { useAuthStore } from './store/auth.store';
 
@@ -21,10 +20,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return isLoggedIn ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
+function DefaultRedirect() {
+  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  return <Navigate to={isLoggedIn ? '/library' : '/search'} replace />;
+}
+
 export default function App() {
   const { logout } = useAuthStore();
 
-  // Listen for forced logout from API interceptor
   useEffect(() => {
     const handler = () => logout();
     window.addEventListener('auth:logout', handler);
@@ -38,7 +41,7 @@ export default function App() {
         <Route path="/register" element={<RegisterPage />} />
 
         <Route element={<AppLayout />}>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<DefaultRedirect />} />
           <Route path="/search" element={<SearchPage />} />
           <Route
             path="/library"
@@ -67,7 +70,7 @@ export default function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<DefaultRedirect />} />
         </Route>
       </Routes>
     </Suspense>
